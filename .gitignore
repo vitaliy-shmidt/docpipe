@@ -1,0 +1,24 @@
+# Secrets / local config
+.env
+config.yaml
+
+# VS Code multi-root workspace (local dev convenience only)
+docpipe.code-workspace
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Temp files
+*.tmp
+tmp/

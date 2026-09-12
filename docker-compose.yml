@@ -1,0 +1,20 @@
+# Local convenience setup. DocPipe does not require this file:
+# point STIRLING_URL at any existing Stirling instance and run the
+# docpipe image (or `uvicorn system.main:app`) on its own.
+services:
+  docpipe:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DOCPIPE_CONFIG: /app/config.yaml
+      STIRLING_URL: http://stirling:8080
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      - stirling
+
+  stirling:
+    image: stirlingtools/stirling-pdf:latest
+    ports:
+      - "8080:8080"
