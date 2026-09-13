@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "inspection_type": { "type": ["string", "null"] },
+    "inspection_date": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "next_due_date": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "vendor_name": { "type": ["string", "null"] },
+    "inspector": { "type": ["string", "null"] },
+    "result": { "type": ["string", "null"] },
+    "defects_found": { "type": ["boolean", "null"] },
+    "certificate_number": { "type": ["string", "null"] },
+    "notes": { "type": ["string", "null"] }
+  },
+  "required": [
+    "inspection_type",
+    "inspection_date",
+    "next_due_date",
+    "vendor_name",
+    "inspector",
+    "result",
+    "defects_found",
+    "certificate_number",
+    "notes"
+  ],
+  "additionalProperties": false
+}

@@ -7,12 +7,24 @@ STATUS_BY_CODE: dict[str, int] = {
     "unauthorized": 401,
     "service_disabled": 403,
     "invalid_file": 400,
+    # Malformed JSON request body (missing/wrong-typed field) on a non-file
+    # endpoint (e.g. /documents/analyze) - kept distinct from invalid_file,
+    # which is specifically about an uploaded document.
+    "invalid_request": 400,
     "file_too_large": 413,
     "upstream_unavailable": 502,
     "upstream_auth_failed": 502,
     "processing_failed": 502,
     "timeout": 504,
     "internal_error": 500,
+    # AI analysis (V2)
+    "ai_disabled": 403,
+    "unknown_mode": 400,
+    "input_too_large": 413,
+    "ai_unavailable": 502,
+    "ai_timeout": 504,
+    "ai_invalid_response": 502,
+    "ai_processing_failed": 500,
 }
 
 

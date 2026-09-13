@@ -1,5 +1,5 @@
 # Local convenience setup. DocPipe does not require this file:
-# point STIRLING_URL at any existing Stirling instance and run the
+# point STIRLING_URL/OLLAMA_URL at any existing instances and run the
 # docpipe image (or `uvicorn system.main:app`) on its own.
 services:
   docpipe:
@@ -9,6 +9,8 @@ services:
     environment:
       DOCPIPE_CONFIG: /app/config.yaml
       STIRLING_URL: http://stirling:8080
+      # Only relevant if a client in config.yaml has services.ai: true.
+      OLLAMA_URL: http://ollama:11434
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     depends_on:
@@ -18,3 +20,20 @@ services:
     image: stirlingtools/stirling-pdf:latest
     ports:
       - "8080:8080"
+
+  # Optional (V2 AI) - only start this if you actually use the analyze
+  # endpoint locally; DocPipe works without it otherwise. Starting this
+  # container does NOT download any model - pull one explicitly once with:
+  #   docker compose exec ollama ollama pull <model>
+  # then set ollama.model in config.yaml to that same name. For GPU
+  # acceleration, add the appropriate `deploy.resources.reservations.devices`
+  # block for your platform - not required, CPU inference works, just slower.
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+volumes:
+  ollama_models:

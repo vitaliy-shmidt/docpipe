@@ -7,7 +7,9 @@ processing engine (Stirling) to consume these responses.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
@@ -25,6 +27,9 @@ class CapabilitiesResponse(BaseModel):
     ok: bool
     services: ServiceFlags
     features: list[str]
+    # Only populated when services.ai is true for the calling client -
+    # lets a consumer discover valid `mode` values without hardcoding them.
+    ai_modes: list[str] | None = None
 
 
 class ExtractTextData(BaseModel):
@@ -41,3 +46,27 @@ class ErrorResponse(BaseModel):
     ok: bool = False
     code: str
     message: str
+
+
+class AnalyzeRequest(BaseModel):
+    mode: str
+    # Open, generic bag of hints (e.g. hotel_name, asset_name, taxonomy,
+    # known_vendor) - not all fields need to be present, and DocPipe does
+    # not interpret any specific key itself; it is passed through to the
+    # prompt as disambiguation context only. Client-controlled fields the
+    # task explicitly forbids (model/temperature/system_prompt/prompt) are
+    # simply never read, whether or not they happen to be present here.
+    context: dict[str, Any] = Field(default_factory=dict)
+    text: str
+
+
+class AnalyzeData(BaseModel):
+    mode: str
+    prompt_version: str
+    model: str
+    result: dict[str, Any]
+
+
+class AnalyzeResponse(BaseModel):
+    ok: bool
+    data: AnalyzeData

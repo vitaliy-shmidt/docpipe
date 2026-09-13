@@ -4,7 +4,8 @@ Configuration is loaded once at process startup from a local YAML file.
 There is no database and no runtime reload in V1.
 
 Load order / priority (highest wins):
-  1. Environment variables (STIRLING_URL, STIRLING_API_KEY, STIRLING_TIMEOUT)
+  1. Environment variables (STIRLING_URL, STIRLING_API_KEY, STIRLING_TIMEOUT,
+     OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
   2. Values from the YAML config file
   3. Built-in defaults
 
@@ -23,6 +24,8 @@ import yaml
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_MAX_FILE_SIZE_MB = 25
 DEFAULT_STIRLING_TIMEOUT_SECONDS = 90
+DEFAULT_OLLAMA_TIMEOUT_SECONDS = 120
+DEFAULT_OLLAMA_TEMPERATURE = 0.0
 
 
 @dataclass(frozen=True)
@@ -33,8 +36,19 @@ class StirlingSettings:
 
 
 @dataclass(frozen=True)
+class OllamaSettings:
+    base_url: str
+    model: str
+    timeout_seconds: int
+    temperature: float = DEFAULT_OLLAMA_TEMPERATURE
+
+
+@dataclass(frozen=True)
 class ClientServices:
     documents: bool = False
+    # Defaults to False when a client config predates V2 (or simply omits
+    # the key) - AI access is always an explicit opt-in, never inherited.
+    ai: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,6 +72,7 @@ class ServerSettings:
 class Settings:
     server: ServerSettings
     stirling: StirlingSettings
+    ollama: OllamaSettings
     clients: dict[str, ClientConfig] = field(default_factory=dict)
 
     def find_client_by_api_key(self, api_key: str) -> ClientConfig | None:
@@ -95,6 +110,19 @@ def load_settings() -> Settings:
         ),
     )
 
+    raw_ollama = raw.get("ollama") or {}
+    ollama = OllamaSettings(
+        base_url=os.environ.get("OLLAMA_URL", raw_ollama.get("base_url", "")),
+        model=os.environ.get("OLLAMA_MODEL", raw_ollama.get("model", "")),
+        timeout_seconds=int(
+            os.environ.get(
+                "OLLAMA_TIMEOUT",
+                raw_ollama.get("timeout_seconds", DEFAULT_OLLAMA_TIMEOUT_SECONDS),
+            )
+        ),
+        temperature=float(raw_ollama.get("temperature", DEFAULT_OLLAMA_TEMPERATURE)),
+    )
+
     clients: dict[str, ClientConfig] = {}
     for client_id, raw_client in (raw.get("clients") or {}).items():
         raw_services = raw_client.get("services") or {}
@@ -102,7 +130,10 @@ def load_settings() -> Settings:
             client_id=client_id,
             enabled=bool(raw_client.get("enabled", False)),
             api_key=str(raw_client.get("api_key", "")),
-            services=ClientServices(documents=bool(raw_services.get("documents", False))),
+            services=ClientServices(
+                documents=bool(raw_services.get("documents", False)),
+                ai=bool(raw_services.get("ai", False)),
+            ),
         )
 
-    return Settings(server=server, stirling=stirling, clients=clients)
+    return Settings(server=server, stirling=stirling, ollama=ollama, clients=clients)

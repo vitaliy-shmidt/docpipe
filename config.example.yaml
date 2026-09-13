@@ -10,9 +10,19 @@ stirling:
   api_key: ""
   timeout_seconds: 90
 
+# Optional (V2): only needed if at least one client has services.ai: true.
+# Pick any small, locally available instruct model - DocPipe does not
+# hardcode or require a specific one. See README.md "V2 AI" for guidance.
+ollama:
+  base_url: "http://ollama:11434"
+  model: "your-model"
+  timeout_seconds: 120
+  temperature: 0
+
 clients:
   demo-client:
     enabled: true
     api_key: "change-me"
     services:
       documents: true
+      ai: true

@@ -55,3 +55,9 @@ def require_documents_service(client: ClientConfig) -> None:
     """Raise DocPipeError("service_disabled") unless documents is enabled for the client."""
     if not client.services.documents:
         raise DocPipeError("service_disabled", "The documents service is not enabled for this client.")
+
+
+def require_ai_service(client: ClientConfig) -> None:
+    """Raise DocPipeError("ai_disabled") unless ai is enabled for the client."""
+    if not client.services.ai:
+        raise DocPipeError("ai_disabled", "The AI analysis service is not enabled for this client.")

@@ -3,8 +3,9 @@
 DocPipe is a generic, authenticated document processing proxy:
 
     Client -> DocPipe (API key check) -> Stirling -> normalized response -> Client
+                                       -> Ollama (AI analysis, V2)   -> normalized response -> Client
 
-See README.md for what V1 does and deliberately does not do.
+See README.md for what V2 does and deliberately does not do.
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from system import VERSION
 from system.config import load_settings
 from system.errors import STATUS_BY_CODE, DocPipeError
-from system.routes import capabilities, documents, health
+from system.routes import analyze, capabilities, documents, health
+from system.services.ollama import OllamaClient
 from system.services.stirling import StirlingClient
 
 logger = logging.getLogger("docpipe")
@@ -34,8 +36,10 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     app.state.settings = settings
     app.state.stirling_client = StirlingClient(settings.stirling)
+    app.state.ollama_client = OllamaClient(settings.ollama)
     yield
     app.state.stirling_client.close()
+    app.state.ollama_client.close()
 
 
 app = FastAPI(title="DocPipe", version=VERSION, lifespan=lifespan)
@@ -43,6 +47,7 @@ app = FastAPI(title="DocPipe", version=VERSION, lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(capabilities.router)
 app.include_router(documents.router)
+app.include_router(analyze.router)
 
 
 @app.middleware("http")
@@ -78,16 +83,25 @@ async def docpipe_error_handler(request: Request, exc: DocPipeError) -> JSONResp
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Same malformed-request situation (missing/wrong-typed field), but a
+    # distinct code for a JSON-body endpoint (e.g. /documents/analyze) vs.
+    # the file-upload endpoint - "invalid_file" is specifically about an
+    # uploaded document and would be a misleading code for a bad `text`/
+    # `mode`/`context` field.
+    is_file_endpoint = request.url.path == "/api/v1/documents/extract-text"
+    code = "invalid_file" if is_file_endpoint else "invalid_request"
     return JSONResponse(
-        status_code=STATUS_BY_CODE["invalid_file"],
-        content={"ok": False, "code": "invalid_file", "message": "The request could not be processed."},
+        status_code=STATUS_BY_CODE[code],
+        content={"ok": False, "code": code, "message": "The request could not be processed."},
     )
 
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     if exc.status_code == 400:
-        code, message = "invalid_file", "The request could not be processed."
+        is_file_endpoint = request.url.path == "/api/v1/documents/extract-text"
+        code = "invalid_file" if is_file_endpoint else "invalid_request"
+        message = "The request could not be processed."
     elif exc.status_code == 404:
         code, message = "internal_error", "Not found."
     else:
