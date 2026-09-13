@@ -10,6 +10,16 @@ stirling:
   api_key: ""
   timeout_seconds: 90
 
+  # Optional OCR fallback for scanned/image-only PDFs - see README.md
+  # "Text extraction". Only used when plain text extraction on a PDF comes
+  # back with fewer than `min_meaningful_characters` real characters.
+  # Omit this whole block entirely for the same defaults shown here.
+  ocr:
+    enabled: true
+    languages: [deu, eng]      # Tesseract language codes; must be installed in Stirling
+    min_meaningful_characters: 30
+    timeout_seconds: 180       # separate from stirling.timeout_seconds - OCR is much slower
+
 # Optional (V2.1): only needed if at least one client has services.ai: true.
 # Provider-wide connection only - no model here. "The client selects the
 # task (mode); DocPipe selects the model (model profile)" - see `models:`

@@ -38,6 +38,15 @@ Minimum to decide/set before first deploy:
 - **Mode routing / overrides**: confirm which client gets which profile
   per mode (`clients.<id>.model_overrides`, or the mode defaults if none
   is set) - see README.md "Model profiles" for the exact resolution order.
+- **OCR fallback** (`stirling.ocr`): on by default - confirm the target
+  Stirling instance actually has OCR tools available (OCRmyPDF and/or
+  Tesseract) and the language data for every code listed in
+  `stirling.ocr.languages` (default `deu`+`eng`). If Stirling has neither
+  tool installed, OCR attempts fail with the existing
+  `upstream_unavailable`/`processing_failed` codes - not a new failure
+  mode, but worth confirming once rather than discovering it on the first
+  real scanned document. See README.md "Text extraction" for the full
+  fallback flow and `stirling.ocr.min_meaningful_characters` threshold.
 
 Config is validated at startup (see README.md "Config validation") - a
 broken model profile or routing reference makes the process refuse to
@@ -53,7 +62,14 @@ GET  /api/v1/health                       - unauthenticated, confirms the proces
 GET  /api/v1/capabilities                 - authenticated, confirms a real client key resolves
                                              correctly and reports the services/modes that
                                              client actually has
-POST /api/v1/documents/extract-text       - a real PDF, confirms the Stirling path end-to-end
+POST /api/v1/documents/extract-text       - a real, text-based PDF, confirms the Stirling
+                                             fast path end-to-end (expect
+                                             extraction_method="embedded_text")
+POST /api/v1/documents/extract-text       - a real, scanned/image-only PDF, confirms the OCR
+                                             fallback end-to-end (expect
+                                             extraction_method="ocr" and meaningfully more than
+                                             a handful of characters back - not just the ~3
+                                             characters a scan yields without OCR)
 POST /api/v1/documents/analyze            - a real (or synthetic) text, confirms the Ollama
                                              path end-to-end for each model profile in use
 ```
@@ -61,6 +77,12 @@ POST /api/v1/documents/analyze            - a real (or synthetic) text, confirms
 Also worth a deliberate negative check: call `/api/v1/capabilities` (or
 `/analyze`) with a wrong/missing key and confirm you get `401
 unauthorized` with no internal detail in the response body.
+
+The OCR fallback call naturally takes noticeably longer than the plain
+extraction call (full-page rendering + Tesseract/OCRmyPDF per page, not
+just a text-layer read) - note both durations when validating (see
+"RAM awareness" below for why that matters on an 8 GB box) rather than
+treating the slower response as a problem on its own.
 
 ## Staging checklist
 
@@ -70,7 +92,8 @@ unauthorized` with no internal detail in the response body.
 [ ] API Key funktioniert
 [ ] unauthorized funktioniert
 [ ] Stirling erreichbar
-[ ] PDF Extraction funktioniert
+[ ] PDF Extraction funktioniert (textbasiertes PDF, embedded_text)
+[ ] OCR Fallback funktioniert (gescanntes PDF, extraction_method=ocr)
 [ ] Ollama erreichbar
 [ ] light Profile funktioniert
 [ ] standard Profile funktioniert
@@ -103,6 +126,13 @@ don't assume it fits from a parameter count alone. If both `light` and
 invoked in the same time window, budget for both being resident
 simultaneously, not just the larger of the two.
 
+The OCR fallback adds its own transient RAM cost on the Stirling side
+(page rasterization + Tesseract/OCRmyPDF) for the duration of a single
+OCR call - check `docker stats` for Stirling specifically during an OCR
+staging test, not just at idle. The AI model does not need to be loaded
+for an OCR test, so OCR and AI load can be measured independently rather
+than assumed additive.
+
 ## Parallelism
 
 Staging validation should assume **one AI request at a time** and load
@@ -134,4 +164,23 @@ real Stirling and a real Ollama instance in this pass):
   possibly larger, `standard`/`heavy` choices);
 - reverse proxy / HTTPS termination behavior;
 - realistic request latency under the target network topology;
-- behavior under whatever concurrency the target actually receives.
+- behavior under whatever concurrency the target actually receives;
+- that Stirling's actual OCR tooling (OCRmyPDF/Tesseract) and language
+  data for every configured `stirling.ocr.languages` code are really
+  present on that instance - the automated test suite only exercises
+  DocPipe's side of the OCR contract against a mock.
+
+## Troubleshooting notes from real staging runs
+
+**Duplicate Stirling API key →
+`IncorrectResultSizeDataAccessException: Query did not return a unique
+result: 2 results were returned`.** Seen when the same API key value had
+been created twice inside Stirling's own user/key store (e.g. re-running
+a setup step). Stirling's own key lookup then fails non-deterministically
+for any request authenticated with that key, surfacing to DocPipe as an
+upstream error. Fix: remove the duplicate key entry on the Stirling side
+and issue a fresh one; confirm with a plain `/api/v1/convert/pdf/text`
+call returning `200` before assuming an OCR-specific problem. This is a
+Stirling-side data issue, not anything DocPipe's code does differently
+per key - worth checking first if *any* Stirling-backed call (not just
+OCR) starts failing after a key rotation.

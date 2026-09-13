@@ -29,13 +29,21 @@ engine or model provider sits behind it, or how to talk to it.
 
 - API key authentication (`Authorization: Bearer <key>`)
 - PDF text extraction, proxied through [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF)
+- Automatic OCR fallback for scanned/image-only PDFs when plain text
+  extraction comes back with too little real text - still entirely via
+  Stirling (see "Text extraction" below); DocPipe orchestrates the
+  fallback, it never runs OCR itself
 - AI analysis of already-extracted text, proxied through [Ollama](https://ollama.com) (V2, optional per client)
 - A normalized, stable success/error response contract across both
 - Per-client service flags loaded from a local config file (no database)
 
 ## What can DocPipe NOT do?
 
-- No OCR orchestration beyond what Stirling itself provides
+- No OCR engine of its own - no bundled Tesseract/OCRmyPDF, no native OCR
+  dependency; OCR is fully delegated to Stirling (see "Text extraction")
+- No OCR language auto-detection - `stirling.ocr.languages` is a fixed,
+  configured list (`deu`+`eng` by default), not detected per document
+- No AI/vision-based OCR or OCR output cleanup (no LLM touches OCR text)
 - No semantic search, no RAG, no model training/fine-tuning
 - No automatic document classification
 - No database, no persistent jobs, no background queue
@@ -63,6 +71,7 @@ docpipe/
 │  ├─ auth.py                  # API key authentication
 │  ├─ errors.py                 # normalized error codes
 │  ├─ schemas.py                 # request/response models
+│  ├─ text_quality.py             # is_text_sufficient() - OCR-fallback trigger heuristic
 │  ├─ ai/
 │  │  ├─ modes.py                 # mode registry (name -> prompt+schema+DEFAULT profile)
 │  │  ├─ resolver.py               # mode + client -> concrete ModelProfile
@@ -138,6 +147,55 @@ curl -X POST \
 
 Interactive API docs are available at `/docs` once the server is running.
 
+## Text extraction
+
+`/documents/extract-text` tries plain (embedded) text extraction first and
+only falls back to OCR when that comes back with too little real text:
+
+```text
+PDF
+  |
+  v
+embedded text extraction (Stirling, fast path)
+  |
+  v
+text sufficient? (is_text_sufficient() - see system/text_quality.py)
+  | yes                              | no
+  v                                  v
+done                          OCR the PDF (Stirling)
+extraction_method=                   |
+  "embedded_text"                    v
+                             embedded text extraction again,
+                             now on the OCR'd PDF
+                                      |
+                                      v
+                                    done
+                            extraction_method="ocr"
+```
+
+- OCR is a fallback, never the default path - a normal text-based PDF
+  never invokes OCR and pays no latency cost for it.
+- The "text sufficient?" check (`is_text_sufficient`,
+  `stirling.ocr.min_meaningful_characters`, default `30`) counts
+  alphanumeric characters only, ignoring whitespace/line-break/control-
+  character artifacts that a scanned PDF's plain-text extraction often
+  still produces. It's a deliberately simple V1 heuristic, not a content
+  classifier - a genuinely short real document can still trigger an OCR
+  attempt; that's an accepted tradeoff, not a bug.
+- OCR only ever runs after a *technically successful* first extraction
+  that came back with too little text. A technical failure of the first
+  extraction (`timeout`, `upstream_unavailable`, `upstream_auth_failed`,
+  `processing_failed`) is returned as-is and never triggers OCR.
+- Exactly one OCR attempt per request - no retry loop, no second OCR pass
+  even if the resulting text is still short or empty. An OCR attempt that
+  runs successfully but finds no recognizable text is a normal success
+  response with `text: ""`, not an error; a *technical* OCR failure (or a
+  failure of the extraction that follows it) is returned as a normal
+  normalized upstream error, same codes as above.
+- The original upload and any intermediate OCR'd PDF are temp files only,
+  removed in the same `finally` block regardless of which stage fails -
+  see "Files & security" below.
+
 ## Pipeline: extract-text and analyze are independent steps
 
 `extract-text` and `analyze` are two separate, independently callable
@@ -172,6 +230,13 @@ stirling:
   base_url: "http://stirling:8080"
   api_key: ""
   timeout_seconds: 90
+
+  ocr:                      # optional - see "Text extraction" above. Omit entirely for
+                             # the pre-OCR defaults shown here (enabled, deu+eng, 30, 180).
+    enabled: true
+    languages: [deu, eng]
+    min_meaningful_characters: 30
+    timeout_seconds: 180    # separate from stirling.timeout_seconds - OCR is much slower
 
 ollama:                    # optional - only needed if any client has services.ai: true
   base_url: "http://ollama:11434"    # provider-wide connection only, no model here
@@ -280,26 +345,38 @@ Reflects what the calling client is actually allowed to use.
 {
   "ok": true,
   "services": { "documents": true, "ai": true },
-  "features": ["extract_text", "analyze"],
+  "features": ["extract_text", "ocr_fallback", "analyze"],
   "ai_modes": ["maintenance_extraction", "inspection_extraction"]
 }
 ```
 
 `ai_modes` is only present (non-null) when `services.ai` is true for the
-calling client.
+calling client. `ocr_fallback` is only present when `documents` is enabled
+for the client *and* `stirling.ocr.enabled` is true server-wide (OCR is a
+server capability, not a per-client flag).
 
 ### `POST /api/v1/documents/extract-text` — authenticated
 
 Multipart upload, field name `file`. Accepts `application/pdf` only
 (verified by content, not by file extension or the declared
-`Content-Type`). Success:
+`Content-Type`). Transparently falls back to OCR for scanned/image-only
+PDFs - see "Text extraction" above. Success:
 
 ```json
 {
   "ok": true,
-  "data": { "text": "...", "text_length": 1234 }
+  "data": {
+    "text": "...",
+    "text_length": 1234,
+    "extraction_method": "embedded_text"
+  }
 }
 ```
+
+`extraction_method` is additive metadata, always one of `"embedded_text"`
+(first-pass extraction already had enough text) or `"ocr"` (the OCR
+fallback ran). Existing consumers that don't read this field are
+unaffected - nothing about the rest of the contract changed.
 
 ### `POST /api/v1/documents/analyze` — authenticated, V2
 
@@ -348,22 +425,39 @@ and `message` are always top-level.
 
 ## Stirling integration
 
-- Endpoint: `POST {stirling.base_url}/api/v1/convert/pdf/text`, multipart
-  field `fileInput`, form field `outputFormat=txt`, verified directly
-  against the current Stirling-PDF source (`ConvertPDFToOffice` controller
-  under `/api/v1/convert`).
+- Text extraction endpoint: `POST {stirling.base_url}/api/v1/convert/pdf/text`,
+  multipart field `fileInput`, form field `outputFormat=txt`, verified
+  directly against the current Stirling-PDF source (`ConvertPDFToOffice`
+  controller under `/api/v1/convert`).
+- OCR endpoint: `POST {stirling.base_url}/api/v1/misc/ocr-pdf`, multipart
+  field `fileInput`, form fields `languages` (repeated, one per configured
+  language code - e.g. `languages=deu` + `languages=eng`, **not** a single
+  combined `"deu+eng"` value), `ocrType=skip-text` (only OCRs pages that
+  don't already have extractable text), `ocrRenderType=hocr`. Response is
+  a single PDF (`sidecar` left at its default `false`, so Stirling never
+  returns a zip) - verified directly against the Stirling-PDF **2.14.2**
+  source tag (`OCRController` + `ProcessPdfWithOcrRequest` under
+  `/api/v1/misc`), not assumed from an older version or from the UI docs
+  alone. Runs synchronously, same as text extraction (no `async=true` is
+  sent, so Stirling returns the result directly instead of a job ID).
 - Auth to Stirling: `X-API-KEY` header, DocPipe's own server-side key —
-  the calling client never sees or supplies it.
-- Timeout: `stirling.timeout_seconds` (default 90s), enforced by DocPipe;
-  clients cannot override it per request.
+  the calling client never sees or supplies it. Used for both endpoints.
+- Timeout: `stirling.timeout_seconds` (default 90s) for text extraction;
+  OCR uses its own, separate `stirling.ocr.timeout_seconds` (default
+  180s) since rendering every page to an image and running Tesseract/
+  OCRmyPDF is substantially slower - see "Text extraction" above. Neither
+  is overridable per request by the calling client.
 - Redirects from Stirling are not followed (the upstream URL is
   server-configured, never client-controlled).
 - All of this lives in exactly one place: [system/services/stirling.py](system/services/stirling.py).
   Nothing else in the codebase talks HTTP to Stirling or sees its raw
-  response shape.
+  response shape - the OCR decision logic (system/text_quality.py) and the
+  route handler (system/routes/documents.py) only ever call
+  `StirlingClient.extract_text()` / `.ocr_pdf()`.
 
 DOC/DOCX extraction is intentionally not exposed: only PDF text
-extraction has been verified against the current Stirling API.
+extraction (and, as of this pass, PDF OCR) has been verified against the
+current Stirling API.
 
 ## AI analysis (V2)
 
@@ -634,7 +728,10 @@ wording, or provider details - see "Multi-project design" above.
   the client-supplied filename is never used to build a path, so a
   crafted filename can't cause path traversal.
 - The temp file is deleted after the request, on both the success and
-  the error path. DocPipe never persists an uploaded document.
+  the error path. DocPipe never persists an uploaded document. When the
+  OCR fallback runs, the OCR'd PDF Stirling returns is held only in
+  memory for the immediate follow-up extraction call - it is never
+  written to disk and never persisted.
 - Uploads are streamed to that temp file in chunks with a running size
   check, so an oversized upload is rejected without needing to be fully
   buffered in memory.
@@ -651,9 +748,14 @@ wording, or provider details - see "Multi-project design" above.
 Structured, one line per request: timestamp, request ID, client ID,
 endpoint, HTTP status, duration. A `X-Request-ID` response header is set
 on every response for correlating client-side and server-side logs.
+`/documents/extract-text` additionally logs one line per successful
+request with input size, initial (pre-OCR) and final text *lengths*
+(never the text itself), whether OCR was attempted, the resulting
+`extraction_method`, and duration.
 
 Never logged: API keys, the `Authorization` header, the Stirling/Ollama
-API keys, document contents/text, AI prompts, or AI output.
+API keys, document contents/text (extracted or OCR'd), the uploaded
+filename, AI prompts, or AI output.
 
 ## Tests
 
@@ -664,19 +766,32 @@ pytest
 ```
 
 The suite mocks both Stirling and Ollama entirely (`tests/conftest.py`,
-`tests/test_ollama_client.py`) and covers: auth (missing/invalid/disabled
-key, disabled service for both `documents` and `ai`), file validation
-(wrong MIME, oversized upload), the Stirling failure modes (unavailable,
-timeout, auth failure), the AI failure modes (unavailable, timeout,
-invalid/malformed model output with and without a successful repair,
-processing failure), mode registry validation (unknown mode, input too
-large, invalid context type), model profile config validation
-(`tests/test_config.py` - missing model, invalid timeout, unsupported
-provider, unknown mode/profile references, fail-fast on inconsistent
-config), model resolution (`tests/test_resolver.py` - mode defaults,
-client overrides, no silent fallback on an invalid profile), strict
-request rejection of client-supplied model/temperature/prompt fields,
-both extraction modes' schemas, a mocked success path for each, that no
+`tests/test_ollama_client.py`, `tests/test_stirling_client.py`) and
+covers: auth (missing/invalid/disabled key, disabled service for both
+`documents` and `ai`), file validation (wrong MIME, oversized upload),
+the Stirling failure modes (unavailable, timeout, auth failure), the OCR
+fallback (`tests/test_api.py` - scanned/whitespace-only/short-real-text
+text triggering OCR, a normal text-based PDF never invoking it, a
+technical failure of the first extraction never triggering it, a failure
+of the OCR call itself or of the post-OCR extraction each surfacing as a
+normal normalized error, a technically successful OCR with no
+recognizable text still returning a normal empty-text success,
+`ocr.enabled: false` skipping the fallback entirely, and that OCR's own
+temp-file cleanup holds under every one of those failure branches), the
+OCR heuristic itself (`tests/test_text_quality.py`), the real Stirling
+HTTP request shape for both endpoints including the repeated `languages`
+multipart fields and the separate OCR timeout (`tests/test_stirling_client.py`),
+the AI failure modes (unavailable, timeout, invalid/malformed model
+output with and without a successful repair, processing failure), mode
+registry validation (unknown mode, input too large, invalid context
+type), model profile config validation (`tests/test_config.py` - missing
+model, invalid timeout, unsupported provider, unknown mode/profile
+references, fail-fast on inconsistent config, OCR config
+defaults/overrides and backward compatibility with a pre-OCR config),
+model resolution (`tests/test_resolver.py` - mode defaults, client
+overrides, no silent fallback on an invalid profile), strict request
+rejection of client-supplied model/temperature/prompt fields, both
+extraction modes' schemas, a mocked success path for each, that no
 secrets/prompts/document text leak into error responses, and that no
 temp files are left behind after a request. No test requires a running
 Stirling or Ollama instance.
@@ -699,3 +814,10 @@ concurrency control/queueing beyond what Ollama itself does, and any
 business logic belonging to a specific consumer project (hotels,
 maintenance, contracts, categories, etc.). HubDix or Chronodix may use
 DocPipe as a client, but DocPipe has no knowledge of either.
+
+Specific to the OCR fallback: OCR language auto-detection (the language
+list is fixed server config, `deu`+`eng` by default), AI/vision-based OCR
+or OCR text cleanup, table/layout-aware extraction, handwriting
+recognition, multi-page parallel OCR, an OCR retry loop (exactly one
+attempt per request), and any OCR request queueing beyond what this
+8 GB target server and Stirling itself already impose.
