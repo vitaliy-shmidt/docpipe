@@ -3,8 +3,8 @@
   "properties": {
     "vendor_name": { "type": ["string", "null"] },
     "service_type": { "type": ["string", "null"] },
-    "performed_at": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-    "next_due_date": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "performed_at": { "type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "next_due_date": { "type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
     "technician": { "type": ["string", "null"] },
     "result": { "type": ["string", "null"] },
     "cost": { "type": ["number", "null"] },
