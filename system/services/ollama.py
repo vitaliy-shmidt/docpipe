@@ -19,6 +19,12 @@ Passing the mode's response_schema as `format` (rather than the literal
 string "json") constrains Ollama's own grammar-based decoding to that
 exact schema - the strongest available guarantee before DocPipe's own
 schema validation runs as a second, independent check.
+
+This client only knows the provider-wide `base_url`. Which model to run,
+with what timeout and temperature, is resolved elsewhere (system/ai/
+resolver.py, from the request's mode and the calling client's config) and
+handed in per call - the client itself has no notion of modes, profiles,
+or client overrides.
 """
 
 from __future__ import annotations
@@ -28,51 +34,58 @@ import json
 import httpx
 import jsonschema
 
-from system.config import OllamaSettings
 from system.errors import DocPipeError
 
 GENERATE_PATH = "/api/generate"
 
 
 class OllamaClient:
-    def __init__(self, settings: OllamaSettings) -> None:
-        self._settings = settings
-        self._client = httpx.Client(follow_redirects=False, timeout=settings.timeout_seconds)
+    def __init__(self, base_url: str) -> None:
+        self._base_url = base_url
+        self._client = httpx.Client(follow_redirects=False)
 
     def close(self) -> None:
         self._client.close()
 
-    def generate_structured(self, prompt: str, schema: dict) -> dict:
-        """Runs prompt against the model and validates the JSON result against schema.
+    def generate_structured(
+        self, prompt: str, schema: dict, *, model: str, timeout_seconds: float, temperature: float
+    ) -> dict:
+        """Runs prompt against `model` and validates the JSON result against schema.
 
         Makes exactly one repair attempt if the first response is not valid
         JSON or does not match schema. Raises DocPipeError("ai_invalid_response")
         if it is still invalid after that single retry - never loops further.
         """
-        raw = self._call(prompt, schema)
+        raw = self._call(
+            prompt, schema, model=model, timeout_seconds=timeout_seconds, temperature=temperature
+        )
         result = self._parse_and_validate(raw, schema)
         if result is not None:
             return result
 
         repair_prompt = self._build_repair_prompt(prompt, raw, schema)
-        raw = self._call(repair_prompt, schema)
+        raw = self._call(
+            repair_prompt, schema, model=model, timeout_seconds=timeout_seconds, temperature=temperature
+        )
         result = self._parse_and_validate(raw, schema)
         if result is not None:
             return result
 
         raise DocPipeError("ai_invalid_response", "The AI model did not return a valid structured response.")
 
-    def _call(self, prompt: str, schema: dict) -> str:
-        url = self._settings.base_url.rstrip("/") + GENERATE_PATH
+    def _call(
+        self, prompt: str, schema: dict, *, model: str, timeout_seconds: float, temperature: float
+    ) -> str:
+        url = self._base_url.rstrip("/") + GENERATE_PATH
         payload = {
-            "model": self._settings.model,
+            "model": model,
             "prompt": prompt,
             "stream": False,
             "format": schema,
-            "options": {"temperature": self._settings.temperature},
+            "options": {"temperature": temperature},
         }
         try:
-            response = self._client.post(url, json=payload)
+            response = self._client.post(url, json=payload, timeout=timeout_seconds)
         except httpx.TimeoutException as exc:
             raise DocPipeError("ai_timeout", "AI analysis timed out.") from exc
         except httpx.HTTPError as exc:

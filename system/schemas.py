@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class HealthResponse(BaseModel):
@@ -49,21 +49,29 @@ class ErrorResponse(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
+    # extra="forbid": the API boundary is mode/context/text ONLY. A client
+    # sending model/model_profile/provider/temperature/timeout/
+    # system_prompt/prompt must get a rejected request (invalid_request),
+    # never a silently-ignored field that might look like it worked.
+    model_config = ConfigDict(extra="forbid")
+
     mode: str
     # Open, generic bag of hints (e.g. hotel_name, asset_name, taxonomy,
     # known_vendor) - not all fields need to be present, and DocPipe does
     # not interpret any specific key itself; it is passed through to the
-    # prompt as disambiguation context only. Client-controlled fields the
-    # task explicitly forbids (model/temperature/system_prompt/prompt) are
-    # simply never read, whether or not they happen to be present here.
+    # prompt as disambiguation context only.
     context: dict[str, Any] = Field(default_factory=dict)
     text: str
 
 
 class AnalyzeData(BaseModel):
     mode: str
-    prompt_version: str
+    # The profile NAME (e.g. "light"), not the model - useful for later
+    # benchmarking/telemetry without hardcoding a model string anywhere
+    # that reads this response.
+    model_profile: str
     model: str
+    prompt_version: str
     result: dict[str, Any]
 
 

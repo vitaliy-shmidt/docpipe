@@ -5,6 +5,12 @@ section): this endpoint takes already-extracted text, never touches
 Stirling, and never re-runs text extraction. A consumer stores the result
 of extract-text first; if analyze later fails, the already-extracted text
 is untouched and does not need to be re-extracted.
+
+Architecture principle: the client selects a *mode* (a task); DocPipe -
+never the client - selects the *model*, via system/ai/resolver.py. The
+request schema (AnalyzeRequest) has no model/model_profile/provider/
+temperature/timeout/prompt field at all, so there is nothing for a client
+to override even if it tried.
 """
 
 from __future__ import annotations
@@ -16,8 +22,9 @@ from fastapi import APIRouter, Depends, Request
 
 from system.ai.modes import get_mode
 from system.ai.prompting import build_prompt
+from system.ai.resolver import resolve_model_profile
 from system.auth import get_authenticated_client, require_ai_service
-from system.config import ClientConfig, Settings
+from system.config import ClientConfig
 from system.errors import DocPipeError
 from system.schemas import AnalyzeData, AnalyzeRequest, AnalyzeResponse
 
@@ -43,7 +50,8 @@ def analyze(
             f"Input text exceeds the maximum length of {mode.max_input_length} characters for this mode.",
         )
 
-    settings: Settings = request.app.state.settings
+    settings = request.app.state.settings
+    profile_name, profile = resolve_model_profile(mode, client, settings)
     prompt = build_prompt(mode, body.context, body.text)
 
     # Same request_id as the generic access-log line (main.py middleware),
@@ -54,25 +62,34 @@ def analyze(
         "request_id": getattr(request.state, "request_id", None),
         "client_id": client.client_id,
         "mode": mode.name,
-        "model": settings.ollama.model,
+        "model_profile": profile_name,
+        "model": profile.model,
         "input_length": len(body.text),
     }
     started_at = time.monotonic()
     try:
-        result = request.app.state.ollama_client.generate_structured(prompt, mode.response_schema)
+        result = request.app.state.ollama_client.generate_structured(
+            prompt,
+            mode.response_schema,
+            model=profile.model,
+            timeout_seconds=profile.timeout_seconds,
+            temperature=profile.temperature,
+        )
     except DocPipeError as exc:
         duration_ms = round((time.monotonic() - started_at) * 1000, 1)
         logger.info(
-            "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s model=%(model)s "
-            "input_length=%(input_length)s status=%(status)s duration_ms=%(duration_ms)s",
+            "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
+            "model_profile=%(model_profile)s model=%(model)s input_length=%(input_length)s "
+            "status=%(status)s duration_ms=%(duration_ms)s",
             {**log_fields, "status": exc.code, "duration_ms": duration_ms},
         )
         raise
 
     duration_ms = round((time.monotonic() - started_at) * 1000, 1)
     logger.info(
-        "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s model=%(model)s "
-        "input_length=%(input_length)s status=success duration_ms=%(duration_ms)s",
+        "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
+        "model_profile=%(model_profile)s model=%(model)s input_length=%(input_length)s "
+        "status=success duration_ms=%(duration_ms)s",
         {**log_fields, "duration_ms": duration_ms},
     )
 
@@ -80,8 +97,9 @@ def analyze(
         ok=True,
         data=AnalyzeData(
             mode=mode.name,
+            model_profile=profile_name,
+            model=profile.model,
             prompt_version=mode.prompt_version,
-            model=settings.ollama.model,
             result=result,
         ),
     )

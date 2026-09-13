@@ -5,7 +5,6 @@ import json
 import httpx
 import pytest
 
-from system.config import OllamaSettings
 from system.errors import DocPipeError
 from system.services.ollama import OllamaClient
 
@@ -16,12 +15,18 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
+CALL_KWARGS = {"model": "test-model", "timeout_seconds": 5, "temperature": 0}
+
 
 def _make_client(handler) -> OllamaClient:
-    settings = OllamaSettings(base_url="http://ollama.test", model="test-model", timeout_seconds=5)
-    client = OllamaClient(settings)
+    client = OllamaClient("http://ollama.test")
     client._client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
     return client
+
+
+def _generate(client: OllamaClient, prompt: str, schema: dict = SCHEMA, **overrides) -> dict:
+    kwargs = {**CALL_KWARGS, **overrides}
+    return client.generate_structured(prompt, schema, **kwargs)
 
 
 def _ollama_response(text: str) -> httpx.Response:
@@ -36,7 +41,7 @@ def test_generate_structured_success_first_try():
         return _ollama_response(json.dumps({"foo": "bar"}))
 
     client = _make_client(handler)
-    result = client.generate_structured("prompt", SCHEMA)
+    result = _generate(client, "prompt")
     assert result == {"foo": "bar"}
     assert len(calls) == 1
 
@@ -51,7 +56,7 @@ def test_generate_structured_repair_success_on_malformed_json():
         return _ollama_response(json.dumps({"foo": "fixed"}))
 
     client = _make_client(handler)
-    result = client.generate_structured("prompt", SCHEMA)
+    result = _generate(client, "prompt")
     assert result == {"foo": "fixed"}
     assert len(calls) == 2
 
@@ -67,9 +72,26 @@ def test_generate_structured_repair_success_on_schema_mismatch():
         return _ollama_response(json.dumps({"foo": "bar"}))
 
     client = _make_client(handler)
-    result = client.generate_structured("prompt", SCHEMA)
+    result = _generate(client, "prompt")
     assert result == {"foo": "bar"}
     assert len(calls) == 2
+
+
+def test_generate_structured_repair_uses_same_resolved_model_and_temperature():
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        if len(bodies) == 1:
+            return _ollama_response("not valid json")
+        return _ollama_response(json.dumps({"foo": "fixed"}))
+
+    client = _make_client(handler)
+    _generate(client, "prompt", model="specific-model", timeout_seconds=42, temperature=0.3)
+
+    assert len(bodies) == 2
+    assert bodies[0]["model"] == bodies[1]["model"] == "specific-model"
+    assert bodies[0]["options"]["temperature"] == bodies[1]["options"]["temperature"] == 0.3
 
 
 def test_generate_structured_repair_failure_raises_ai_invalid_response():
@@ -81,7 +103,7 @@ def test_generate_structured_repair_failure_raises_ai_invalid_response():
 
     client = _make_client(handler)
     with pytest.raises(DocPipeError) as excinfo:
-        client.generate_structured("prompt", SCHEMA)
+        _generate(client, "prompt")
     assert excinfo.value.code == "ai_invalid_response"
     assert excinfo.value.status_code == 502
     assert len(calls) == 2  # exactly one repair attempt, no more
@@ -93,7 +115,7 @@ def test_generate_structured_connection_error_raises_ai_unavailable():
 
     client = _make_client(handler)
     with pytest.raises(DocPipeError) as excinfo:
-        client.generate_structured("prompt", SCHEMA)
+        _generate(client, "prompt")
     assert excinfo.value.code == "ai_unavailable"
     assert excinfo.value.status_code == 502
 
@@ -104,7 +126,7 @@ def test_generate_structured_timeout_raises_ai_timeout():
 
     client = _make_client(handler)
     with pytest.raises(DocPipeError) as excinfo:
-        client.generate_structured("prompt", SCHEMA)
+        _generate(client, "prompt")
     assert excinfo.value.code == "ai_timeout"
     assert excinfo.value.status_code == 504
 
@@ -115,12 +137,12 @@ def test_generate_structured_non_200_raises_ai_processing_failed():
 
     client = _make_client(handler)
     with pytest.raises(DocPipeError) as excinfo:
-        client.generate_structured("prompt", SCHEMA)
+        _generate(client, "prompt")
     assert excinfo.value.code == "ai_processing_failed"
     assert excinfo.value.status_code == 500
 
 
-def test_generate_structured_sends_schema_as_format_and_zero_temperature():
+def test_generate_structured_sends_schema_as_format_and_resolved_params():
     captured = {}
 
     def handler(request):
@@ -128,9 +150,29 @@ def test_generate_structured_sends_schema_as_format_and_zero_temperature():
         return _ollama_response(json.dumps({"foo": "bar"}))
 
     client = _make_client(handler)
-    client.generate_structured("my prompt", SCHEMA)
+    _generate(client, "my prompt", model="light-model", timeout_seconds=60, temperature=0)
+
     assert captured["body"]["format"] == SCHEMA
     assert captured["body"]["options"]["temperature"] == 0
     assert captured["body"]["prompt"] == "my prompt"
     assert captured["body"]["stream"] is False
-    assert captured["body"]["model"] == "test-model"
+    assert captured["body"]["model"] == "light-model"
+
+
+_FAKE_RESPONSE_TEXT = json.dumps({"foo": "bar"})
+
+
+def test_generate_structured_passes_resolved_timeout_to_http_call():
+    client = OllamaClient("http://ollama.test")
+    captured_kwargs = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured_kwargs["url"] = url
+        captured_kwargs["timeout"] = timeout
+        return _ollama_response(_FAKE_RESPONSE_TEXT)
+
+    client._client.post = fake_post
+    _generate(client, "prompt", model="model-a", timeout_seconds=42)
+
+    assert captured_kwargs["timeout"] == 42
+    assert captured_kwargs["url"] == "http://ollama.test/api/generate"

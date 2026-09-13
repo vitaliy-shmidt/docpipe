@@ -2,10 +2,22 @@
 
 Clients never choose a prompt, a model, or a schema directly - they only
 ever name one of these pre-registered, server-controlled modes. This is
-the single place that maps a mode name to its versioned prompt template
-and its response JSON Schema. Adding a mode means adding an entry here
-plus its prompt/schema files under system/prompts/ - nothing else in the
-request/response pipeline needs to change.
+the single place that maps a mode name to its versioned prompt template,
+its response JSON Schema, and its *default* model profile. Adding a mode
+means adding an entry here plus its prompt/schema files under
+system/prompts/ - nothing else in the request/response pipeline needs to
+change.
+
+`model_profile` here is a profile NAME (e.g. "light"), never a concrete
+model - "the client selects a task, DocPipe selects the model" holds one
+level deeper too: even the mode registry doesn't hardcode a vendor/model
+string, only which resource/quality class a mode defaults to. The actual
+model behind that name is config (see config.py's `models:` section) and
+can change without touching this file. A client-specific override of
+this default (config.py's ClientConfig.model_overrides) and the final
+name -> ModelProfile lookup both happen in system/ai/resolver.py - this
+file only defines the registry, not the routing/override logic, so that
+logic exists in exactly one place.
 """
 
 from __future__ import annotations
@@ -24,10 +36,14 @@ class Mode:
     prompt_template: str
     response_schema: dict
     max_input_length: int
+    # Default model profile NAME for this mode (see module docstring).
+    model_profile: str
     description: str = ""
 
 
-def _load_mode(name: str, prompt_version: str, max_input_length: int, description: str) -> Mode:
+def _load_mode(
+    name: str, prompt_version: str, max_input_length: int, model_profile: str, description: str
+) -> Mode:
     mode_dir = PROMPTS_DIR / name
     prompt_template = (mode_dir / f"{prompt_version}.txt").read_text(encoding="utf-8")
     response_schema = json.loads((mode_dir / "schema.json").read_text(encoding="utf-8"))
@@ -37,6 +53,7 @@ def _load_mode(name: str, prompt_version: str, max_input_length: int, descriptio
         prompt_template=prompt_template,
         response_schema=response_schema,
         max_input_length=max_input_length,
+        model_profile=model_profile,
         description=description,
     )
 
@@ -46,17 +63,25 @@ def _load_mode(name: str, prompt_version: str, max_input_length: int, descriptio
 _MAX_INPUT_LENGTH = 80_000
 
 MODES: dict[str, Mode] = {
+    # Maintenance reports are mostly straightforward structured extraction
+    # (a handful of fields from a short-to-medium service report) - the
+    # cheapest/fastest profile is the sensible default.
     "maintenance_extraction": _load_mode(
         "maintenance_extraction",
         "v1",
         _MAX_INPUT_LENGTH,
-        "Extract structured maintenance/service facts from a maintenance document.",
+        model_profile="light",
+        description="Extract structured maintenance/service facts from a maintenance document.",
     ),
+    # Inspection reports vary more in structure and wording and often need
+    # more semantic judgement (e.g. distinguishing a real defect finding
+    # from boilerplate text) - defaults one class up.
     "inspection_extraction": _load_mode(
         "inspection_extraction",
         "v1",
         _MAX_INPUT_LENGTH,
-        "Extract structured inspection facts from an inspection/certification document.",
+        model_profile="standard",
+        description="Extract structured inspection facts from an inspection/certification document.",
     ),
 }
 

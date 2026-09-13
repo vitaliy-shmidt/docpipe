@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     app.state.settings = settings
     app.state.stirling_client = StirlingClient(settings.stirling)
-    app.state.ollama_client = OllamaClient(settings.ollama)
+    app.state.ollama_client = OllamaClient(settings.ollama.base_url)
     yield
     app.state.stirling_client.close()
     app.state.ollama_client.close()

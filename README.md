@@ -59,13 +59,14 @@ engine or model provider sits behind it, or how to talk to it.
 docpipe/
 ├─ system/                  # application source root
 │  ├─ main.py                # app wiring, middleware, error handlers
-│  ├─ config.py               # YAML config + env overrides
+│  ├─ config.py               # YAML config + env overrides + model profiles
 │  ├─ auth.py                  # API key authentication
 │  ├─ errors.py                 # normalized error codes
 │  ├─ schemas.py                 # request/response models
 │  ├─ ai/
-│  │  ├─ modes.py                 # mode registry (name -> prompt+schema+limits)
-│  │  └─ prompting.py              # builds the final prompt from mode+context+text
+│  │  ├─ modes.py                 # mode registry (name -> prompt+schema+DEFAULT profile)
+│  │  ├─ resolver.py               # mode + client -> concrete ModelProfile
+│  │  └─ prompting.py               # builds the final prompt from mode+context+text
 │  ├─ prompts/
 │  │  ├─ maintenance_extraction/
 │  │  │  ├─ v1.txt                  # versioned prompt template
@@ -82,6 +83,8 @@ docpipe/
 │     ├─ documents.py              # extract-text
 │     └─ analyze.py                # AI analysis (V2)
 ├─ tests/                    # pytest suite, Stirling and Ollama are mocked
+├─ docs/
+│  └─ staging-deployment.md   # deployment guide + validation checklist
 ├─ config.example.yaml        # template — copy to config.yaml, don't commit it
 ├─ .env.example
 ├─ Dockerfile
@@ -94,7 +97,8 @@ docpipe/
 ```bash
 cp config.example.yaml config.yaml
 # edit config.yaml: set stirling.base_url and a real client api_key
-# (only if you use AI analysis) set ollama.base_url and ollama.model too
+# (only if you use AI analysis) set ollama.base_url and define at least
+# the model profiles your active modes default to - see "Model profiles" below
 
 pip install -r requirements.txt
 uvicorn system.main:app --host 0.0.0.0 --port 8000
@@ -170,10 +174,24 @@ stirling:
   timeout_seconds: 90
 
 ollama:                    # optional - only needed if any client has services.ai: true
-  base_url: "http://ollama:11434"
-  model: "your-model"
-  timeout_seconds: 120
-  temperature: 0
+  base_url: "http://ollama:11434"    # provider-wide connection only, no model here
+
+models:                    # named resource/quality classes - see "Model profiles" below
+  light:
+    provider: ollama
+    model: "your-small-model"
+    timeout_seconds: 60
+    temperature: 0
+  standard:
+    provider: ollama
+    model: "your-medium-model"
+    timeout_seconds: 120
+    temperature: 0
+  heavy:
+    provider: ollama
+    model: "your-large-model"
+    timeout_seconds: 180
+    temperature: 0
 
 clients:
   demo-client:
@@ -182,6 +200,10 @@ clients:
     services:
       documents: true
       ai: true              # optional, defaults to false if omitted (V1 configs keep working unchanged)
+
+    model_overrides:          # optional - mode name -> model PROFILE name (never a raw model name)
+      maintenance_extraction: light
+      inspection_extraction: standard
 ```
 
 Only `config.example.yaml` is committed. The real `config.yaml` (or
@@ -201,17 +223,38 @@ never exposed through the API.
 | `STIRLING_API_KEY`  | `stirling.api_key`               | (from file)    |
 | `STIRLING_TIMEOUT`  | `stirling.timeout_seconds`        | (from file)    |
 | `OLLAMA_URL`        | `ollama.base_url`                  | (from file)    |
-| `OLLAMA_MODEL`      | `ollama.model`                      | (from file)    |
-| `OLLAMA_TIMEOUT`    | `ollama.timeout_seconds`             | (from file)    |
 
 Priority: environment variable > value in the YAML file > built-in default.
 `DOCPIPE_CONFIG` only selects *which* file is read; it does not override a
-value inside it. `ollama.temperature` has no environment override (kept
-minimal — one more knob that in practice is always left at 0 for
-extraction tasks; change it in the YAML file if you ever need to).
+value inside it. Model profiles (`models:`) have no environment override
+at all — by design, they change only through config, never through code
+or an env var, so "which model backs a profile" stays a single,
+reviewable place per environment (see "Model profiles" below).
 
-Client definitions (`clients:`) are only ever read from the YAML file —
-there is intentionally no per-client environment override.
+Client definitions (`clients:`, including `model_overrides:`) are only
+ever read from the YAML file — there is intentionally no per-client
+environment override.
+
+### Config validation (fail fast)
+
+If AI is "configured" — meaning `models:` is non-empty, or at least one
+client has `services.ai: true` or a non-empty `model_overrides` — DocPipe
+validates the whole AI configuration at startup, before accepting any
+request:
+
+- every profile under `models:` has a `provider` (currently only
+  `"ollama"` is supported), a non-empty `model`, `timeout_seconds > 0`,
+  and a non-negative `temperature`;
+- every active mode's default profile name (see `system/ai/modes.py`)
+  exists under `models:`;
+- every client's `model_overrides` references a real mode name and a
+  real profile name.
+
+Any violation raises `ConfigError` and the process refuses to start —
+never a 500 on the first `/analyze` call that happens to hit the broken
+path. A config with no AI use at all (no `models:`, no client with `ai`
+or `model_overrides`) skips this validation entirely and behaves exactly
+like a pre-AI DocPipe deployment.
 
 ## API
 
@@ -289,7 +332,13 @@ Every error, from any endpoint, has the same shape:
 | `ai_timeout`            | 504         | Ollama did not respond within the timeout         |
 | `ai_invalid_response`   | 502         | Model output was not valid JSON matching the schema, even after one repair attempt |
 | `ai_processing_failed`  | 500         | Ollama reachable but returned another error       |
+| `model_profile_unavailable` | 502     | Resolved model profile name has no `models:` entry (config/runtime drift - see below) |
 | `internal_error`        | 500         | Unexpected DocPipe-side failure                   |
+
+`model_profile_unavailable` should, in practice, never happen: the same
+condition it checks for is already caught by startup validation (see
+"Config validation" above). It exists as a defense-in-depth check inside
+the resolver itself, not as a normal client-facing error path.
 
 No stack traces, no upstream secrets, and no raw Stirling/Ollama payloads
 ever reach the client — that boundary is one of DocPipe's main jobs. This
@@ -358,10 +407,13 @@ schema + registry entry, nothing else in the request pipeline changes.
 
 - `mode` and `text` are required; `context` is optional and none of its
   fields are required — it is an open bag of hints, not a fixed schema.
-- The client can **only** send `mode`, `context`, and `text`. There is no
-  way to send `model`, `temperature`, `system_prompt`, or a raw `prompt`
-  — those are entirely server-controlled; DocPipe's request schema has no
-  such fields, so sending them has no effect.
+- **The client selects the task. DocPipe selects the model.** The
+  request schema (`AnalyzeRequest`) accepts `mode`, `context`, and `text`
+  and *rejects* (`invalid_request`, HTTP 400) anything else - a request
+  containing `model`, `model_profile`, `provider`, `temperature`,
+  `timeout`, `system_prompt`, or `prompt` fails validation outright. It
+  isn't a case of those fields being silently ignored; they simply aren't
+  legal request shape, by construction (pydantic `extra="forbid"`).
 
 **Context is a hint, never a fact.** Every prompt explicitly instructs
 the model: use context only to resolve ambiguity in the document text,
@@ -388,8 +440,9 @@ ID is the consuming system's job, not DocPipe's.
   "ok": true,
   "data": {
     "mode": "maintenance_extraction",
+    "model_profile": "light",
+    "model": "qwen2.5:1.5b-instruct",
     "prompt_version": "v1",
-    "model": "qwen2.5:7b-instruct",
     "result": {
       "vendor_name": "KONE GmbH",
       "service_type": "Aufzugswartung",
@@ -405,8 +458,118 @@ ID is the consuming system's job, not DocPipe's.
 }
 ```
 
-`model` and `prompt_version` are metadata only, for traceability - never
-the prompt text itself, and never Ollama's raw response.
+`model_profile`, `model`, and `prompt_version` are metadata only, for
+traceability and later benchmarking - never the prompt text itself, the
+repair prompt, or Ollama's raw response. Nothing about `stirling.base_url`,
+`ollama.base_url`, or any API key is ever reachable through this or any
+other response.
+
+## Model profiles
+
+The core principle, one level below "the client selects the task": **the
+client selects a mode; DocPipe - never the client - selects the model**,
+by resolving that mode to a named model profile.
+
+```text
+Mode (client-visible, e.g. "maintenance_extraction")
+  |
+  v
+Model Profile (server-config, e.g. "light")           <- system/ai/resolver.py
+  |
+  v
+Concrete model (config-only, e.g. "qwen2.5:1.5b-instruct")
+```
+
+A profile is a resource/quality class, not a vendor or a specific model:
+
+```yaml
+models:
+  light:
+    provider: ollama
+    model: "qwen3:4b"        # whatever you actually have pulled
+    timeout_seconds: 60
+    temperature: 0
+  standard:
+    provider: ollama
+    model: "qwen3:8b"
+    timeout_seconds: 120
+    temperature: 0
+  heavy:
+    provider: ollama
+    model: "mistral:latest"
+    timeout_seconds: 180
+    temperature: 0
+```
+
+`light` is not "Qwen"; `heavy` is not "Mistral" - the example above just
+shows one possible assignment. Swapping which model backs `light` never
+touches `system/ai/modes.py`, any prompt, or any route handler - only the
+YAML file.
+
+`provider` is a real, validated field (only `"ollama"` is implemented
+right now) so a second provider can be added later without reshaping the
+config format or the `ModelProfile` dataclass - no second provider
+implementation exists in this pass, this is only about not painting the
+config into a corner.
+
+### Mode -> profile routing
+
+Each mode has one hardcoded default **profile name** (not a model name)
+in `system/ai/modes.py`:
+
+| mode                     | default profile | why |
+|--------------------------|------------------|-----|
+| `maintenance_extraction` | `light`          | Mostly straightforward structured extraction from a short-to-medium service report. |
+| `inspection_extraction`  | `standard`       | Wording and structure vary more; often needs more semantic judgement (e.g. telling a real defect finding apart from boilerplate). |
+
+`contract_extraction`, `project_offer_extraction`, and similar
+more-complex future modes are expected to default to `heavy` - which is
+exactly why `heavy` is defined as a profile class already, even though no
+active mode uses it yet (see "Not implemented" below: `contract_extraction`
+itself is not built in this pass).
+
+### Client overrides
+
+A client can bump (or lower) a specific mode's profile for *itself only*,
+by profile name - never by raw model name:
+
+```yaml
+clients:
+  hubdix:
+    ...
+    model_overrides:
+      maintenance_extraction: light      # explicit, same as the default
+      inspection_extraction: standard
+```
+
+```yaml
+model_overrides:
+  maintenance_extraction: "qwen3:14b"    # INVALID - rejected at startup, not a profile name
+```
+
+**Resolution order** (`system/ai/resolver.py`, the only place this logic
+exists):
+
+1. the calling client's `model_overrides` entry for this mode, if present;
+2. otherwise, the mode's own default profile;
+3. otherwise, `DocPipeError("model_profile_unavailable")` — **never** a
+   silent fallback to some other profile or a hardcoded model. If a
+   client's override points at a profile that isn't defined, DocPipe does
+   not fall back to that mode's own default either - an invalid override
+   is a hard error, not a soft downgrade.
+
+### Multi-project design
+
+One DocPipe instance can serve multiple, unrelated client projects, each
+with its own routing, without any of them knowing a concrete model name:
+
+```text
+HubDix         -> maintenance_extraction -> light (its own default)
+Project B      -> maintenance_extraction -> standard (its own override)
+```
+
+Both clients send the exact same request shape (`mode`, `context`,
+`text`); only DocPipe's config decides which actually runs where.
 
 ### Structured output & validation
 
@@ -428,17 +591,40 @@ the prompt text itself, and never Ollama's raw response.
 - Endpoint: `POST {ollama.base_url}/api/generate`, `{"model", "prompt",
   "stream": false, "format": <schema>, "options": {"temperature": ...}}` —
   verified against Ollama's current API docs.
-- Model and temperature are entirely server-configured
-  (`ollama.model`/`ollama.temperature`); no per-client or per-request
-  override exists. Temperature defaults to `0` for deterministic
-  extraction.
-- Timeout: `ollama.timeout_seconds` (default 120s), enforced by DocPipe.
-- All of this lives in exactly one place:
-  [system/services/ollama.py](system/services/ollama.py). Nothing else in
-  the codebase talks HTTP to Ollama or sees its raw response shape.
-- Model choice is a config concern, not a code concern: pick any small,
-  locally available instruct model that supports Ollama's structured
-  outputs — nothing in DocPipe hardcodes a specific model family.
+- `OllamaClient` (`system/services/ollama.py`) only knows the
+  provider-wide `base_url`. `model`, `timeout_seconds`, and `temperature`
+  are resolved per request (mode + calling client -> model profile, see
+  "Model profiles" above) and passed in on each call - the HTTP client
+  itself has no notion of modes, profiles, or client overrides, and
+  cannot be reached without those parameters.
+- Temperature defaults to `0` per profile for deterministic extraction;
+  change it per profile in `models:` if you ever need to.
+- All Ollama-specific knowledge lives in exactly this one file. Nothing
+  else in the codebase talks HTTP to Ollama or sees its raw response
+  shape.
+- Model choice is entirely a config concern: pick any locally available
+  instruct model(s) that support Ollama's structured outputs — nothing in
+  DocPipe hardcodes a specific model family, and different profiles are
+  free to point at the very same underlying model file if you don't need
+  three distinct model files yet.
+
+## API boundary (what each side is allowed to know)
+
+```text
+Client knows:            DocPipe knows:
+  mode                      the resolved model profile
+  context                   provider
+  text                      model
+                            temperature
+                            timeout
+                            prompt template (versioned, per mode)
+                            response JSON Schema (per mode)
+```
+
+A client can name a *task*; it can never see or influence *how* that task
+is carried out. This is what makes "one DocPipe, many client projects"
+possible without any client needing to track model names, prompt
+wording, or provider details - see "Multi-project design" above.
 
 ## Files & security
 
@@ -484,21 +670,32 @@ key, disabled service for both `documents` and `ai`), file validation
 timeout, auth failure), the AI failure modes (unavailable, timeout,
 invalid/malformed model output with and without a successful repair,
 processing failure), mode registry validation (unknown mode, input too
-large, invalid context type), both extraction modes' schemas, a mocked
-success path for each, that no secrets/prompts/document text leak into
-error responses, and that no temp files are left behind after a request.
-No test requires a running Stirling or Ollama instance.
+large, invalid context type), model profile config validation
+(`tests/test_config.py` - missing model, invalid timeout, unsupported
+provider, unknown mode/profile references, fail-fast on inconsistent
+config), model resolution (`tests/test_resolver.py` - mode defaults,
+client overrides, no silent fallback on an invalid profile), strict
+request rejection of client-supplied model/temperature/prompt fields,
+both extraction modes' schemas, a mocked success path for each, that no
+secrets/prompts/document text leak into error responses, and that no
+temp files are left behind after a request. No test requires a running
+Stirling or Ollama instance.
 
 If you do have real Stirling/Ollama instances available locally, a
 manual end-to-end check with an actual PDF and a few real documents per
-AI mode is worthwhile before deploying, but it is not part of the
-automated suite.
+AI mode is worthwhile before deploying — see
+[docs/staging-deployment.md](docs/staging-deployment.md) for a checklist.
 
 ## Not implemented (by design)
 
 Semantic search, RAG, model training/fine-tuning, automatic document
 classification, a database, quotas/plans/usage/billing, user management,
 a web UI, persistent job storage, input chunking for oversized AI text,
-and any business logic belonging to a specific consumer project (hotels,
+a second model provider (the `provider` field exists for one, but only
+`"ollama"` is implemented), `contract_extraction`/other `heavy`-profile
+modes (the `heavy` profile class exists so they can be added later
+without an architecture change, but none is built yet), request
+concurrency control/queueing beyond what Ollama itself does, and any
+business logic belonging to a specific consumer project (hotels,
 maintenance, contracts, categories, etc.). HubDix or Chronodix may use
 DocPipe as a client, but DocPipe has no knowledge of either.

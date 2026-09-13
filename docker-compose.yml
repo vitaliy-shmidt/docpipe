@@ -21,11 +21,12 @@ services:
     ports:
       - "8080:8080"
 
-  # Optional (V2 AI) - only start this if you actually use the analyze
+  # Optional (V2.1 AI) - only start this if you actually use the analyze
   # endpoint locally; DocPipe works without it otherwise. Starting this
   # container does NOT download any model - pull one explicitly once with:
   #   docker compose exec ollama ollama pull <model>
-  # then set ollama.model in config.yaml to that same name. For GPU
+  # then reference that same name from a profile's `model:` field under
+  # `models:` in config.yaml (see config.example.yaml). For GPU
   # acceleration, add the appropriate `deploy.resources.reservations.devices`
   # block for your platform - not required, CPU inference works, just slower.
   ollama:

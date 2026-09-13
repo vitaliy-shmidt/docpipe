@@ -10,14 +10,39 @@ stirling:
   api_key: ""
   timeout_seconds: 90
 
-# Optional (V2): only needed if at least one client has services.ai: true.
-# Pick any small, locally available instruct model - DocPipe does not
-# hardcode or require a specific one. See README.md "V2 AI" for guidance.
+# Optional (V2.1): only needed if at least one client has services.ai: true.
+# Provider-wide connection only - no model here. "The client selects the
+# task (mode); DocPipe selects the model (model profile)" - see `models:`
+# below and README.md "AI analysis" for the full picture.
 ollama:
   base_url: "http://ollama:11434"
-  model: "your-model"
-  timeout_seconds: 120
-  temperature: 0
+
+# Named resource/quality classes, not vendors: `light` is not "Qwen",
+# `heavy` is not "Mistral" - the profile name is what modes and client
+# overrides reference; only the profile's own `model:` field says which
+# actual model backs it, and that can change per environment without
+# touching any mode definition. Pick any locally available instruct
+# models - DocPipe does not hardcode or require specific ones. `heavy` is
+# deliberately provided even though no active mode defaults to it yet
+# (see README.md "Model profiles").
+models:
+  light:
+    provider: ollama
+    model: "your-small-model"
+    timeout_seconds: 60
+    temperature: 0
+
+  standard:
+    provider: ollama
+    model: "your-medium-model"
+    timeout_seconds: 120
+    temperature: 0
+
+  heavy:
+    provider: ollama
+    model: "your-large-model"
+    timeout_seconds: 180
+    temperature: 0
 
 clients:
   demo-client:
@@ -26,3 +51,10 @@ clients:
     services:
       documents: true
       ai: true
+
+    # Optional per-client override: mode name -> model PROFILE name only
+    # (never a raw model name). Omit entirely to use each mode's built-in
+    # default profile (see system/ai/modes.py).
+    model_overrides:
+      maintenance_extraction: light
+      inspection_extraction: standard

@@ -25,6 +25,11 @@ STATUS_BY_CODE: dict[str, int] = {
     "ai_timeout": 504,
     "ai_invalid_response": 502,
     "ai_processing_failed": 500,
+    # Config/runtime inconsistency: the mode's (or the client override's)
+    # resolved model profile name has no matching entry under `models:`.
+    # Should only ever happen if the running config drifted from what
+    # config.py's startup validation checked - never a normal client error.
+    "model_profile_unavailable": 502,
 }
 
 

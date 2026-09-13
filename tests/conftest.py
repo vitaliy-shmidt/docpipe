@@ -7,6 +7,7 @@ from system import main as main_module
 from system.config import (
     ClientConfig,
     ClientServices,
+    ModelProfile,
     OllamaSettings,
     ServerSettings,
     Settings,
@@ -19,6 +20,7 @@ NO_DOCS_KEY = "no-docs-key"
 DISABLED_KEY = "disabled-key"
 AI_KEY = "ai-key"
 NO_AI_KEY = "no-ai-key"
+AI_OVERRIDE_KEY = "ai-override-key"
 
 MAX_FILE_SIZE_MB = 1
 
@@ -66,19 +68,27 @@ SAMPLE_MAINTENANCE_RESULT = {
 class FakeOllamaClient:
     """Test double standing in for the real Ollama HTTP client."""
 
-    def __init__(self, settings) -> None:
-        self.settings = settings
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
         self.mode = "success"
         self.result = dict(SAMPLE_MAINTENANCE_RESULT)
         self.calls = 0
         self.last_prompt = None
+        self.last_model = None
+        self.last_timeout_seconds = None
+        self.last_temperature = None
 
     def close(self) -> None:
         pass
 
-    def generate_structured(self, prompt: str, schema: dict) -> dict:
+    def generate_structured(
+        self, prompt: str, schema: dict, *, model: str, timeout_seconds: float, temperature: float
+    ) -> dict:
         self.calls += 1
         self.last_prompt = prompt
+        self.last_model = model
+        self.last_timeout_seconds = timeout_seconds
+        self.last_temperature = temperature
         if self.mode == "success":
             return self.result
         if self.mode == "unavailable":
@@ -94,15 +104,25 @@ class FakeOllamaClient:
         raise AssertionError(f"unexpected fake ollama mode: {self.mode}")
 
 
+LIGHT_MODEL = "light-test-model"
+STANDARD_MODEL = "standard-test-model"
+HEAVY_MODEL = "heavy-test-model"
+
+TEST_MODEL_PROFILES = {
+    "light": ModelProfile(provider="ollama", model=LIGHT_MODEL, timeout_seconds=5, temperature=0),
+    "standard": ModelProfile(provider="ollama", model=STANDARD_MODEL, timeout_seconds=5, temperature=0),
+    "heavy": ModelProfile(provider="ollama", model=HEAVY_MODEL, timeout_seconds=5, temperature=0),
+}
+
+
 def _build_test_settings() -> Settings:
     return Settings(
         server=ServerSettings(max_file_size_mb=MAX_FILE_SIZE_MB),
         stirling=StirlingSettings(
             base_url="http://stirling.test", api_key="stirling-secret", timeout_seconds=5
         ),
-        ollama=OllamaSettings(
-            base_url="http://ollama.test", model="test-model", timeout_seconds=5, temperature=0
-        ),
+        ollama=OllamaSettings(base_url="http://ollama.test"),
+        models=dict(TEST_MODEL_PROFILES),
         clients={
             "enabled-client": ClientConfig(
                 client_id="enabled-client",
@@ -134,6 +154,15 @@ def _build_test_settings() -> Settings:
                 api_key=NO_AI_KEY,
                 services=ClientServices(documents=True, ai=False),
             ),
+            "ai-override-client": ClientConfig(
+                client_id="ai-override-client",
+                enabled=True,
+                api_key=AI_OVERRIDE_KEY,
+                services=ClientServices(documents=True, ai=True),
+                # maintenance_extraction defaults to "light" - this client
+                # is bumped to "standard" for that one mode only.
+                model_overrides={"maintenance_extraction": "standard"},
+            ),
         },
     )
 
@@ -156,8 +185,8 @@ def fake_stirling_holder(monkeypatch):
 def fake_ollama_holder(monkeypatch):
     holder: dict = {}
 
-    def factory(settings):
-        instance = FakeOllamaClient(settings)
+    def factory(base_url):
+        instance = FakeOllamaClient(base_url)
         holder["client"] = instance
         return instance
 
