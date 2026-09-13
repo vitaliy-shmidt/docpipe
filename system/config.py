@@ -43,6 +43,23 @@ DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_MAX_FILE_SIZE_MB = 25
 DEFAULT_STIRLING_TIMEOUT_SECONDS = 90
 
+# OCR is a fallback for scanned/image-only PDFs, used only when plain text
+# extraction comes back with too little real text - see
+# system/text_quality.py. Deliberately enabled by default: the production
+# Stirling instance this targets already ships Tesseract German/English
+# language data, so a client pointing at a fresh Stirling without OCR tools
+# installed will simply see OCR attempts fail with the existing
+# upstream_unavailable/processing_failed codes - no new failure mode is
+# introduced by defaulting to on.
+DEFAULT_OCR_ENABLED = True
+DEFAULT_OCR_LANGUAGES = ("deu", "eng")
+DEFAULT_OCR_MIN_MEANINGFUL_CHARACTERS = 30
+# OCR (rendering every page to an image and running Tesseract/OCRmyPDF) is
+# far slower than plain text extraction - a separate, longer timeout so a
+# realistic multi-page scan doesn't get cut off by the fast-path's
+# stirling.timeout_seconds, without making that fast path wait longer too.
+DEFAULT_OCR_TIMEOUT_SECONDS = 180
+
 SUPPORTED_MODEL_PROVIDERS = {"ollama"}
 
 
@@ -51,10 +68,23 @@ class ConfigError(Exception):
 
 
 @dataclass(frozen=True)
+class OcrSettings:
+    """Scanned-PDF OCR fallback settings - nested under `stirling:` since OCR
+    is entirely a Stirling capability, not a separate provider.
+    """
+
+    enabled: bool = DEFAULT_OCR_ENABLED
+    languages: tuple[str, ...] = DEFAULT_OCR_LANGUAGES
+    min_meaningful_characters: int = DEFAULT_OCR_MIN_MEANINGFUL_CHARACTERS
+    timeout_seconds: int = DEFAULT_OCR_TIMEOUT_SECONDS
+
+
+@dataclass(frozen=True)
 class StirlingSettings:
     base_url: str
     api_key: str
     timeout_seconds: int
+    ocr: OcrSettings = OcrSettings()
 
 
 @dataclass(frozen=True)
@@ -248,6 +278,15 @@ def load_settings() -> Settings:
     )
 
     raw_stirling = raw.get("stirling") or {}
+    raw_ocr = raw_stirling.get("ocr") or {}
+    ocr = OcrSettings(
+        enabled=bool(raw_ocr.get("enabled", DEFAULT_OCR_ENABLED)),
+        languages=tuple(raw_ocr.get("languages") or DEFAULT_OCR_LANGUAGES),
+        min_meaningful_characters=int(
+            raw_ocr.get("min_meaningful_characters", DEFAULT_OCR_MIN_MEANINGFUL_CHARACTERS)
+        ),
+        timeout_seconds=int(raw_ocr.get("timeout_seconds", DEFAULT_OCR_TIMEOUT_SECONDS)),
+    )
     stirling = StirlingSettings(
         base_url=os.environ.get("STIRLING_URL", raw_stirling.get("base_url", "")),
         api_key=os.environ.get("STIRLING_API_KEY", raw_stirling.get("api_key", "")),
@@ -257,6 +296,7 @@ def load_settings() -> Settings:
                 raw_stirling.get("timeout_seconds", DEFAULT_STIRLING_TIMEOUT_SECONDS),
             )
         ),
+        ocr=ocr,
     )
 
     raw_ollama = raw.get("ollama") or {}

@@ -32,9 +32,17 @@ class CapabilitiesResponse(BaseModel):
     ai_modes: list[str] | None = None
 
 
+# Additive response metadata (see documents.py): "embedded_text" means the
+# first, fast extraction attempt already had enough text; "ocr" means that
+# attempt came back insufficient and the OCR fallback ran instead.
+EXTRACTION_METHOD_EMBEDDED_TEXT = "embedded_text"
+EXTRACTION_METHOD_OCR = "ocr"
+
+
 class ExtractTextData(BaseModel):
     text: str
     text_length: int
+    extraction_method: str
 
 
 class ExtractTextResponse(BaseModel):

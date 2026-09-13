@@ -73,6 +73,59 @@ clients:
     assert settings.models == {}
 
 
+def test_config_without_ocr_block_uses_enabled_defaults(tmp_path, monkeypatch):
+    """A config predating the OCR fallback (no `stirling.ocr:` key) must
+    still load, with OCR on by default - see config.py's DEFAULT_OCR_*
+    constants for why enabled defaults to True rather than False."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+stirling:
+  base_url: "http://stirling:8080"
+  api_key: ""
+  timeout_seconds: 90
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOCPIPE_CONFIG", str(config_path))
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+    settings = load_settings()
+
+    assert settings.stirling.ocr.enabled is True
+    assert settings.stirling.ocr.languages == ("deu", "eng")
+    assert settings.stirling.ocr.min_meaningful_characters == 30
+    assert settings.stirling.ocr.timeout_seconds == 180
+
+
+def test_config_with_explicit_ocr_block_overrides_defaults(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+stirling:
+  base_url: "http://stirling:8080"
+  api_key: ""
+  timeout_seconds: 90
+  ocr:
+    enabled: false
+    languages:
+      - eng
+    min_meaningful_characters: 50
+    timeout_seconds: 240
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOCPIPE_CONFIG", str(config_path))
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+    settings = load_settings()
+
+    assert settings.stirling.ocr.enabled is False
+    assert settings.stirling.ocr.languages == ("eng",)
+    assert settings.stirling.ocr.min_meaningful_characters == 50
+    assert settings.stirling.ocr.timeout_seconds == 240
+
+
 def test_ollama_url_env_override_takes_priority_over_file(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

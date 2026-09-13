@@ -25,31 +25,57 @@ AI_OVERRIDE_KEY = "ai-override-key"
 MAX_FILE_SIZE_MB = 1
 
 
+def _raise_for_mode(mode: str) -> None:
+    if mode == "unavailable":
+        raise DocPipeError(
+            "upstream_unavailable", "Document processing service is temporarily unavailable."
+        )
+    if mode == "timeout":
+        raise DocPipeError("timeout", "Document processing timed out.")
+    if mode == "auth_failed":
+        raise DocPipeError("upstream_auth_failed", "Document processing service rejected the request.")
+    if mode != "success":
+        raise AssertionError(f"unexpected fake stirling mode: {mode}")
+
+
 class FakeStirlingClient:
-    """Test double standing in for the real Stirling HTTP client."""
+    """Test double standing in for the real Stirling HTTP client.
+
+    Three independent knobs, one per upstream call the OCR fallback can
+    make: `mode` for the first extract_text call, `ocr_mode` for ocr_pdf,
+    `second_extract_mode` for the extract_text call run on the OCR'd PDF -
+    independent so a test can make e.g. OCR itself succeed while the
+    extraction that follows it fails.
+    """
 
     def __init__(self, settings) -> None:
         self.settings = settings
         self.mode = "success"
-        self.text = "extracted text"
-        self.calls = 0
+        # Long enough to clear the default OCR threshold (30 meaningful
+        # characters) on its own - this is the "normal, embedded-text PDF"
+        # fixture value; short-text/scan scenarios set `self.text` per test.
+        self.text = "This is extracted text from a normal text-based PDF document."
+        self.ocr_mode = "success"
+        self.second_extract_mode = "success"
+        self.second_extract_text = "ocr extracted text"
+        self.extract_calls = 0
+        self.ocr_calls = 0
 
     def close(self) -> None:
         pass
 
     def extract_text(self, file_bytes: bytes, filename: str) -> str:
-        self.calls += 1
-        if self.mode == "success":
+        self.extract_calls += 1
+        if self.extract_calls == 1:
+            _raise_for_mode(self.mode)
             return self.text
-        if self.mode == "unavailable":
-            raise DocPipeError(
-                "upstream_unavailable", "Document processing service is temporarily unavailable."
-            )
-        if self.mode == "timeout":
-            raise DocPipeError("timeout", "Document processing timed out.")
-        if self.mode == "auth_failed":
-            raise DocPipeError("upstream_auth_failed", "Document processing service rejected the request.")
-        raise AssertionError(f"unexpected fake stirling mode: {self.mode}")
+        _raise_for_mode(self.second_extract_mode)
+        return self.second_extract_text
+
+    def ocr_pdf(self, file_bytes: bytes, filename: str, languages) -> bytes:
+        self.ocr_calls += 1
+        _raise_for_mode(self.ocr_mode)
+        return b"%PDF-1.4\nocr-output"
 
 
 SAMPLE_MAINTENANCE_RESULT = {
