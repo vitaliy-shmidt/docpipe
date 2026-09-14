@@ -13,6 +13,15 @@ services:
       OLLAMA_URL: http://ollama:11434
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      # V2.2 Prompt Lab (see docs/prompt-lab.md): the repo-shipped prompts
+      # baked into the image stay read-only (DocPipe never writes into
+      # /app/system/prompts - see system/ai/prompt_registry.py). This
+      # second, writable volume is where a prompt_lab client's saved
+      # versions and each mode's active-version pointer actually persist
+      # across a redeploy - without it, a Lab save/activate would still
+      # work (files land inside the container) but vanish on the next
+      # `docker compose up --build`.
+      - ./runtime-prompts:/app/runtime-prompts
     depends_on:
       - stirling
 

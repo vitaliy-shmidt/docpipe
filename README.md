@@ -34,7 +34,13 @@ engine or model provider sits behind it, or how to talk to it.
   Stirling (see "Text extraction" below); DocPipe orchestrates the
   fallback, it never runs OCR itself
 - AI analysis of already-extracted text, proxied through [Ollama](https://ollama.com) (V2, optional per client)
-- A normalized, stable success/error response contract across both
+- Runtime-resolved, versioned AI prompts per mode, with a `prompt_lab`-gated
+  API to draft-test/save/activate a new version without an image rebuild
+  or restart (V2.2, optional per client - see [docs/prompt-lab.md](docs/prompt-lab.md))
+- A deterministic, keyword-routed assistant query endpoint - a technical
+  foundation for a future hotel assistant, not the assistant itself
+  (V2.2, optional per client - see [docs/assistant-routing.md](docs/assistant-routing.md))
+- A normalized, stable success/error response contract across all of the above
 - Per-client service flags loaded from a local config file (no database)
 
 ## What can DocPipe NOT do?
@@ -54,6 +60,13 @@ engine or model provider sits behind it, or how to talk to it.
 - No business logic specific to any consuming project (HubDix or otherwise)
 - No chunking of oversized AI input — a text over a mode's limit is
   rejected, not silently split or truncated
+- No arbitrary/client-supplied prompt on the normal AI path — a draft
+  prompt is only ever accepted by `/lab/analyze`, gated by its own
+  `prompt_lab` permission (see [docs/prompt-lab.md](docs/prompt-lab.md))
+- No database access, SQL generation, tool calling, or autonomous agent
+  behavior anywhere in the assistant routing endpoint — it classifies a
+  question and calls Ollama with context the caller already prepared,
+  nothing else (see [docs/assistant-routing.md](docs/assistant-routing.md))
 
 ## Architecture
 
@@ -73,16 +86,28 @@ docpipe/
 │  ├─ schemas.py                 # request/response models
 │  ├─ text_quality.py             # is_text_sufficient() - OCR-fallback trigger heuristic
 │  ├─ ai/
-│  │  ├─ modes.py                 # mode registry (name -> prompt+schema+DEFAULT profile)
-│  │  ├─ resolver.py               # mode + client -> concrete ModelProfile
-│  │  └─ prompting.py               # builds the final prompt from mode+context+text
+│  │  ├─ modes.py                 # extraction mode registry (name -> schema+DEFAULT profile/prompt version)
+│  │  ├─ resolver.py               # mode + client -> concrete ModelProfile (extraction AND assistant)
+│  │  ├─ prompting.py               # builds the final extraction prompt from template+context+text
+│  │  └─ prompt_registry.py          # runtime-resolved, versioned prompt storage (V2.2) - see docs/prompt-lab.md
+│  ├─ assistant/                  # routing foundation (V2.2) - see docs/assistant-routing.md
+│  │  ├─ modes.py                 # assistant mode registry (name -> DEFAULT profile/prompt version)
+│  │  ├─ router.py                 # deterministic question -> mode classification
+│  │  └─ prompting.py               # builds the final assistant prompt from template+context+question
 │  ├─ prompts/
 │  │  ├─ maintenance_extraction/
-│  │  │  ├─ v1.txt                  # versioned prompt template
-│  │  │  └─ schema.json              # response JSON Schema
-│  │  └─ inspection_extraction/
-│  │     ├─ v1.txt
-│  │     └─ schema.json
+│  │  │  ├─ v1.txt                  # versioned prompt template (base/default - see docs/prompt-lab.md)
+│  │  │  └─ schema.json              # response JSON Schema (not Lab-editable)
+│  │  ├─ inspection_extraction/
+│  │  │  ├─ v1.txt
+│  │  │  └─ schema.json
+│  │  └─ assistant/                # one subfolder per assistant mode, same v1.txt/active.json shape
+│  │     ├─ hotel_health_summary/v1.txt
+│  │     ├─ maintenance_question/v1.txt
+│  │     ├─ inspection_question/v1.txt
+│  │     ├─ contract_question/v1.txt
+│  │     ├─ document_question/v1.txt
+│  │     └─ general_hotel_question/v1.txt
 │  ├─ services/
 │  │  ├─ stirling.py              # the only module that knows Stirling
 │  │  └─ ollama.py                 # the only module that knows Ollama
@@ -90,10 +115,15 @@ docpipe/
 │     ├─ health.py
 │     ├─ capabilities.py
 │     ├─ documents.py              # extract-text
-│     └─ analyze.py                # AI analysis (V2)
+│     ├─ analyze.py                # AI analysis (V2)
+│     ├─ lab.py                    # Prompt Lab API (V2.2)
+│     └─ assistant.py              # assistant query endpoint (V2.2)
+├─ runtime-prompts/          # writable Prompt Lab storage (V2.2, gitignored - see docs/prompt-lab.md)
 ├─ tests/                    # pytest suite, Stirling and Ollama are mocked
 ├─ docs/
-│  └─ staging-deployment.md   # deployment guide + validation checklist
+│  ├─ staging-deployment.md   # deployment guide + validation checklist
+│  ├─ prompt-lab.md            # runtime prompt versioning + Lab API (V2.2)
+│  └─ assistant-routing.md      # assistant routing foundation (V2.2)
 ├─ config.example.yaml        # template — copy to config.yaml, don't commit it
 ├─ .env.example
 ├─ Dockerfile
@@ -344,16 +374,20 @@ Reflects what the calling client is actually allowed to use.
 ```json
 {
   "ok": true,
-  "services": { "documents": true, "ai": true },
-  "features": ["extract_text", "ocr_fallback", "analyze"],
-  "ai_modes": ["maintenance_extraction", "inspection_extraction"]
+  "services": { "documents": true, "ai": true, "prompt_lab": true, "assistant": true },
+  "features": ["extract_text", "ocr_fallback", "analyze", "prompt_lab", "assistant"],
+  "ai_modes": ["maintenance_extraction", "inspection_extraction"],
+  "assistant_modes": ["hotel_health_summary", "maintenance_question", "inspection_question", "contract_question", "document_question", "general_hotel_question"]
 }
 ```
 
-`ai_modes` is only present (non-null) when `services.ai` is true for the
-calling client. `ocr_fallback` is only present when `documents` is enabled
-for the client *and* `stirling.ocr.enabled` is true server-wide (OCR is a
-server capability, not a per-client flag).
+`ai_modes`/`assistant_modes` are only present (non-null) when
+`services.ai`/`services.assistant` is true for the calling client.
+`ocr_fallback` is only present when `documents` is enabled for the client
+*and* `stirling.ocr.enabled` is true server-wide (OCR is a server
+capability, not a per-client flag). `prompt_lab` and `assistant` are both
+independent opt-ins from `ai` - a client needs the matching flag even if
+it already has `ai: true`.
 
 ### `POST /api/v1/documents/extract-text` — authenticated
 
@@ -381,7 +415,31 @@ unaffected - nothing about the rest of the contract changed.
 ### `POST /api/v1/documents/analyze` — authenticated, V2
 
 Only for clients with `services.ai: true`. See "AI analysis" below for
-the full request/response contract, modes, and error codes.
+the full request/response contract, modes, and error codes. Never
+accepts a client-supplied prompt - see "Prompt Lab (V2.2)" below for the
+one endpoint that does.
+
+### Prompt Lab endpoints — authenticated, V2.2
+
+Only for clients with `services.prompt_lab: true`
+(`/lab/analyze` additionally needs `services.ai: true`). Full contract in
+[docs/prompt-lab.md](docs/prompt-lab.md):
+
+```text
+GET  /api/v1/lab/prompts                          - every mode's active version + all known versions
+GET  /api/v1/lab/prompts/{mode}                    - load a version's content (?version=, defaults to active)
+POST /api/v1/lab/analyze                           - test a DRAFT prompt (never persisted, never the active version)
+POST /api/v1/lab/prompts/{mode}/versions           - save a new, immutable version
+POST /api/v1/lab/prompts/{mode}/activate           - make an existing version active (never automatic on save)
+```
+
+### `POST /api/v1/assistant/query` — authenticated, V2.2
+
+Only for clients with `services.assistant: true`. Routes a free-text
+question to one of a fixed set of assistant modes and answers it strictly
+from caller-supplied `context` - full contract, trust boundary, and
+grounding rules in [docs/assistant-routing.md](docs/assistant-routing.md).
+Not a full hotel assistant - a routing/prompting foundation for one.
 
 ### Error contract
 
@@ -410,6 +468,13 @@ Every error, from any endpoint, has the same shape:
 | `ai_invalid_response`   | 502         | Model output was not valid JSON matching the schema, even after one repair attempt |
 | `ai_processing_failed`  | 500         | Ollama reachable but returned another error       |
 | `model_profile_unavailable` | 502     | Resolved model profile name has no `models:` entry (config/runtime drift - see below) |
+| `prompt_lab_disabled`   | 403         | Client is known but `prompt_lab` isn't enabled    |
+| `unknown_prompt_version` | 404        | Requested/activated prompt version doesn't resolve (runtime or base) |
+| `invalid_prompt_version` | 400        | Malformed version name on save (see docs/prompt-lab.md "Version naming") |
+| `prompt_version_exists` | 409         | Save target already exists - versions are immutable |
+| `invalid_prompt`        | 400         | Empty prompt content, or a template that fails to render |
+| `prompt_too_large`      | 413         | Prompt content/draft exceeds `prompts.max_content_length` |
+| `assistant_disabled`    | 403         | Client is known but `assistant` isn't enabled     |
 | `internal_error`        | 500         | Unexpected DocPipe-side failure                   |
 
 `model_profile_unavailable` should, in practice, never happen: the same
@@ -474,10 +539,18 @@ of a fixed, server-defined set of **modes** (see
 versioned prompt template and response JSON Schema under
 [system/prompts/](system/prompts/):
 
-| mode                     | prompt version | fields extracted |
-|--------------------------|----------------|-------------------|
-| `maintenance_extraction` | `v1`           | `vendor_name`, `service_type`, `performed_at`, `next_due_date`, `technician`, `result`, `cost`, `currency`, `notes` |
-| `inspection_extraction`  | `v1`           | `inspection_type`, `inspection_date`, `next_due_date`, `vendor_name`, `inspector`, `result`, `defects_found`, `certificate_number`, `notes` |
+| mode                     | default prompt version | fields extracted |
+|--------------------------|-------------------------|-------------------|
+| `maintenance_extraction` | `v1`                    | `vendor_name`, `service_type`, `performed_at`, `next_due_date`, `technician`, `result`, `cost`, `currency`, `notes` |
+| `inspection_extraction`  | `v1`                    | `inspection_type`, `inspection_date`, `next_due_date`, `vendor_name`, `inspector`, `result`, `defects_found`, `certificate_number`, `notes` |
+
+"Default" because the prompt *text* is no longer fixed at deploy time
+(V2.2): each mode's actually-active version is runtime-resolved on every
+request and can be changed (draft-tested, saved, activated) through the
+`prompt_lab`-gated Lab API without a rebuild or restart - see
+[docs/prompt-lab.md](docs/prompt-lab.md). The response schema and
+`max_input_length` shown per mode are still fixed here in code, not
+Lab-editable.
 
 More modes (`contract_extraction`, `project_offer_extraction`,
 `document_summary`, ...) are anticipated by this same registry structure
@@ -557,6 +630,12 @@ traceability and later benchmarking - never the prompt text itself, the
 repair prompt, or Ollama's raw response. Nothing about `stirling.base_url`,
 `ollama.base_url`, or any API key is ever reachable through this or any
 other response.
+
+`prompt_version` is resolved fresh on every request (V2.2) - it's
+whichever version is currently *active* for that mode, not a value baked
+in at deploy time. See [docs/prompt-lab.md](docs/prompt-lab.md) for how a
+version becomes active and why this needs no cache/restart to take
+effect.
 
 ## Model profiles
 
@@ -796,6 +875,24 @@ secrets/prompts/document text leak into error responses, and that no
 temp files are left behind after a request. No test requires a running
 Stirling or Ollama instance.
 
+Prompt Lab (`tests/test_prompt_registry.py` - the registry directly:
+version name validation incl. path-traversal strings, runtime-over-base
+layering, save/duplicate-rejected/invalid-name-rejected/too-large-
+rejected, activate/activate-missing-rejected, hot reload without a
+restart; `tests/test_lab.py` - the same at the HTTP layer plus
+`prompt_lab`/`ai` permission gating on every route, save/activate
+path-traversal rejected as `unknown_prompt_version`, a malformed draft/
+saved template rejected, a draft never persisting or touching the active
+version, and `/documents/analyze` continuing to reject a `prompt` field)
+and the assistant routing foundation (`tests/test_assistant_router.py` -
+all German/English examples from the task's routing acceptance list plus
+the document-vs-maintenance-keyword priority case;
+`tests/test_assistant.py` - `assistant` permission, correct mode/model-
+profile/prompt-version resolution, the request `context` object never
+mutated, question/context size limits, the three Ollama failure-mode
+mappings, and that neither the question nor `context` leak into a
+response or error) round out the suite.
+
 If you do have real Stirling/Ollama instances available locally, a
 manual end-to-end check with an actual PDF and a few real documents per
 AI mode is worthwhile before deploying — see
@@ -821,3 +918,16 @@ or OCR text cleanup, table/layout-aware extraction, handwriting
 recognition, multi-page parallel OCR, an OCR retry loop (exactly one
 attempt per request), and any OCR request queueing beyond what this
 8 GB target server and Stirling itself already impose.
+
+Specific to the Prompt Lab (see [docs/prompt-lab.md](docs/prompt-lab.md)
+"Not implemented"): response-schema editing, per-client prompt version
+pinning, and version deletion/rollback beyond re-activating an older
+version.
+
+Specific to the assistant routing foundation (see
+[docs/assistant-routing.md](docs/assistant-routing.md) "Not
+implemented"): the actual production HubDix integration, any database/
+SQL/tool access, RAG/document retrieval, an LLM-based router, per-client
+assistant model-profile overrides, and Prompt Lab editing for assistant
+prompts specifically (they're runtime-versioned like extraction prompts,
+just not yet reachable through `/lab/...`).

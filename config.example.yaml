@@ -27,6 +27,18 @@ stirling:
 ollama:
   base_url: "http://ollama:11434"
 
+# Optional (V2.2) - see docs/prompt-lab.md. Omit this whole block entirely
+# for the defaults shown here. base_dir is the repo-shipped prompts
+# (read-only in production, see docker-compose.yml's `:ro` mount);
+# runtime_dir is where the Prompt Lab actually writes saved versions and
+# each mode's active-version pointer - point it at a persistent volume in
+# production, or leave it as a plain local folder for development (it is
+# created automatically on first save).
+prompts:
+  base_dir: "system/prompts"
+  runtime_dir: "runtime-prompts"
+  max_content_length: 32000
+
 # Named resource/quality classes, not vendors: `light` is not "Qwen",
 # `heavy` is not "Mistral" - the profile name is what modes and client
 # overrides reference; only the profile's own `model:` field says which
@@ -61,10 +73,18 @@ clients:
     services:
       documents: true
       ai: true
+      # Optional (V2.2), both independent opt-ins from `ai` - see
+      # docs/prompt-lab.md / docs/assistant-routing.md. A real deployment
+      # should normally only grant prompt_lab to an internal/admin client
+      # (e.g. HubDix's DocLab), never to an ordinary integration client.
+      prompt_lab: true
+      assistant: true
 
     # Optional per-client override: mode name -> model PROFILE name only
     # (never a raw model name). Omit entirely to use each mode's built-in
-    # default profile (see system/ai/modes.py).
+    # default profile (see system/ai/modes.py). Extraction modes only -
+    # assistant modes have no per-client override yet (see
+    # docs/assistant-routing.md "Not implemented").
     model_overrides:
       maintenance_extraction: light
       inspection_extraction: standard

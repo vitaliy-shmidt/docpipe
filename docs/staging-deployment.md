@@ -47,11 +47,56 @@ Minimum to decide/set before first deploy:
   mode, but worth confirming once rather than discovering it on the first
   real scanned document. See README.md "Text extraction" for the full
   fallback flow and `stirling.ocr.min_meaningful_characters` threshold.
+- **Prompt Lab runtime directory** (`prompts.runtime_dir`, V2.2): must be
+  a *writable*, persistent volume mount, separate from the read-only
+  `system/prompts` bind mount - see "Prompt Lab runtime directory" below.
+  Only relevant if any client has `services.prompt_lab: true`.
+- **`services.prompt_lab`** / **`services.assistant`** per client (V2.2):
+  both independent opt-ins from `ai`, like `services.ai` itself - a
+  client needs the matching flag even if it already has `ai: true`. In
+  practice `prompt_lab` should normally go only to an internal/admin
+  client (e.g. HubDix's DocLab), not an ordinary integration client - see
+  [docs/prompt-lab.md](../docs/prompt-lab.md).
 
 Config is validated at startup (see README.md "Config validation") - a
-broken model profile or routing reference makes the process refuse to
-start, so a failed deploy here should show up immediately in the startup
-logs, not as a mysterious first-request 500.
+broken model profile or routing reference (extraction **or** assistant
+mode routing, V2.2) makes the process refuse to start, so a failed deploy
+here should show up immediately in the startup logs, not as a mysterious
+first-request 500. The same startup check also fails fast if a base
+prompt file itself is missing/unreadable (e.g. a botched image build) -
+this covers both extraction and assistant modes.
+
+## Prompt Lab runtime directory (V2.2)
+
+`prompts.runtime_dir` (default `runtime-prompts`, relative to the process
+working directory - `/app/runtime-prompts` inside the container) is where
+a `prompt_lab` client's saved versions and each mode's active-version
+pointer actually live. It is **not** the same mount as
+`system/prompts` (read-only, baked into the image) - see
+[docs/prompt-lab.md](../docs/prompt-lab.md) "Base vs. runtime prompts".
+
+```yaml
+# docker-compose.yml (already present in this repo)
+volumes:
+  - ./config.yaml:/app/config.yaml:ro
+  - ./runtime-prompts:/app/runtime-prompts
+```
+
+Before first deploy:
+
+- create the host-side `./runtime-prompts` directory yourself (don't let
+  Docker auto-create it) and confirm it's writable by the UID the
+  container actually runs as - the image runs as a non-root user
+  (`docpipe`, uid `1000`, see `Dockerfile`), so a bind-mounted directory
+  owned by a different UID/root-only permissions will make every Lab
+  save/activate fail with a filesystem permission error, not a clean
+  DocPipe error code;
+- it does not need to be pre-populated - `PromptRegistry` creates
+  `runtime-prompts/<mode>/` on the very first save for that mode;
+- back it up like any other stateful volume if Lab-saved prompt versions
+  matter to you - losing it doesn't break DocPipe (every mode falls back
+  to its repo-shipped base version), it just silently reverts every
+  mode to that base version.
 
 ## Server validation
 
@@ -78,6 +123,36 @@ Also worth a deliberate negative check: call `/api/v1/capabilities` (or
 `/analyze`) with a wrong/missing key and confirm you get `401
 unauthorized` with no internal detail in the response body.
 
+If any client has `services.prompt_lab: true` (V2.2), run the **prompt
+hot-reload acceptance test** - this is the central Prompt Lab check, see
+[docs/prompt-lab.md](../docs/prompt-lab.md):
+
+```text
+1. POST /documents/analyze (maintenance_extraction) - note prompt_version in the response (normally "v1")
+2. POST /lab/prompts/maintenance_extraction/versions - save a trivially different draft as "v2"
+3. POST /lab/prompts/maintenance_extraction/activate - {"version": "v2"}
+4. POST /documents/analyze (maintenance_extraction) again - prompt_version must now read "v2"
+```
+
+No DocPipe restart/redeploy anywhere between steps 1 and 4 - if step 4
+still reports `v1`, something is wrong with the runtime directory (wrong
+mount, permission error silently swallowed, wrong `prompts.runtime_dir`
+in `config.yaml`), not with the Lab logic itself (already covered by
+`tests/test_lab.py::test_prompt_hot_reload_without_restart`, which
+exercises the identical sequence against a mocked Ollama).
+
+If any client has `services.assistant: true` (V2.2), a quick smoke test:
+
+```json
+POST /api/v1/assistant/query
+{ "question": "Wie steht mein Hotel technisch da?", "context": { "maintenance_overdue": 2, "open_defects": 3, "critical_defects": 1 } }
+```
+
+Expect `assistant_mode: "hotel_health_summary"` and an `answer` that only
+mentions the numbers actually supplied in `context` - no invented
+details, no claim of a fact `context` doesn't contain. See
+[docs/assistant-routing.md](../docs/assistant-routing.md).
+
 The OCR fallback call naturally takes noticeably longer than the plain
 extraction call (full-page rendering + Tesseract/OCRmyPDF per page, not
 just a text-layer read) - note both durations when validating (see
@@ -102,6 +177,9 @@ treating the slower response as a problem on its own.
 [ ] RAM gemessen
 [ ] CPU gemessen
 [ ] Laufzeit gemessen
+[ ] runtime-prompts/ beschreibbar (richtiger UID/Mount) - nur falls prompt_lab genutzt wird
+[ ] Prompt Hot Reload funktioniert ohne Neustart - nur falls prompt_lab genutzt wird
+[ ] Assistant Smoke Test liefert nur belegte Fakten - nur falls assistant genutzt wird
 ```
 
 ## RAM awareness
@@ -169,6 +247,20 @@ real Stirling and a real Ollama instance in this pass):
   data for every configured `stirling.ocr.languages` code are really
   present on that instance - the automated test suite only exercises
   DocPipe's side of the OCR contract against a mock.
+
+**Prompt Lab / assistant routing (V2.2) specifically:** this pass's
+verification was entirely the automated test suite
+(`tests/test_prompt_registry.py`, `tests/test_lab.py`,
+`tests/test_assistant_router.py`, `tests/test_assistant.py` - 179 tests
+total, all against a mocked Ollama) - no real Ollama instance or
+container redeploy was available to confirm the hot-reload acceptance
+test and the assistant smoke test above against a real model. Both are
+called out explicitly in the staging checklist because they're the one
+thing the mock cannot stand in for: the mocked hot-reload test proves the
+*registry/routing* logic is correct, but only a real
+`docker compose up -d` with an actual mounted `runtime-prompts` volume
+proves the *deployment* (mount, permissions, `config.yaml` path) is
+correct too.
 
 ## Troubleshooting notes from real staging runs
 
