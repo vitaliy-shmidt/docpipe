@@ -34,14 +34,29 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import yaml
 
-from system.ai.modes import MODES
+from system.ai.modes import MODES, PROMPTS_DIR
+from system.ai.prompt_registry import PromptRegistry
+from system.assistant.modes import ASSISTANT_MODES
 
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_MAX_FILE_SIZE_MB = 25
 DEFAULT_STIRLING_TIMEOUT_SECONDS = 90
+
+# See system/ai/prompt_registry.py. base_dir defaults to the exact same
+# directory system/ai/modes.py has always loaded schemas from - no second
+# hardcoded path to drift out of sync with it. runtime_dir defaults to a
+# plain relative path (like DEFAULT_CONFIG_PATH) - in production this is a
+# mounted, persistent volume (see docker-compose.yml), in a local/dev run
+# it's simply created on first Prompt Lab save.
+DEFAULT_PROMPTS_BASE_DIR = PROMPTS_DIR
+DEFAULT_PROMPTS_RUNTIME_DIR = Path("runtime-prompts")
+# Generous but bounded (see task §55) - a real prompt is a few KB; this is
+# a safety net against an accidental huge paste, not a tuned limit.
+DEFAULT_PROMPT_MAX_CONTENT_LENGTH = 32_000
 
 # OCR is a fallback for scanned/image-only PDFs, used only when plain text
 # extraction comes back with too little real text - see
@@ -110,11 +125,29 @@ class ModelProfile:
 
 
 @dataclass(frozen=True)
+class PromptSettings:
+    """Where system/ai/prompt_registry.py's PromptRegistry reads/writes. See
+    that module's docstring for the base/runtime layering."""
+
+    base_dir: Path = DEFAULT_PROMPTS_BASE_DIR
+    runtime_dir: Path = DEFAULT_PROMPTS_RUNTIME_DIR
+    max_content_length: int = DEFAULT_PROMPT_MAX_CONTENT_LENGTH
+
+
+@dataclass(frozen=True)
 class ClientServices:
     documents: bool = False
     # Defaults to False when a client config predates V2 (or simply omits
     # the key) - AI access is always an explicit opt-in, never inherited.
     ai: bool = False
+    # V2.2: Prompt Lab (draft-test/save/activate prompt versions) and the
+    # assistant routing endpoint - both separate, explicit opt-ins from
+    # `ai`. A client with `ai: true` alone gets neither: it can call
+    # /documents/analyze but not touch a prompt version or the assistant
+    # endpoint, and a prompt_lab/assistant client still needs `ai: true`
+    # too wherever an actual Ollama call is involved (see auth.py).
+    prompt_lab: bool = False
+    assistant: bool = False
 
 
 @dataclass(frozen=True)
@@ -142,6 +175,7 @@ class Settings:
     server: ServerSettings
     stirling: StirlingSettings
     ollama: OllamaSettings
+    prompts: PromptSettings = PromptSettings()
     models: dict[str, ModelProfile] = field(default_factory=dict)
     clients: dict[str, ClientConfig] = field(default_factory=dict)
 
@@ -235,6 +269,40 @@ def _validate_mode_routing(models: dict[str, ModelProfile]) -> None:
             )
 
 
+def _validate_assistant_mode_routing(models: dict[str, ModelProfile]) -> None:
+    for mode_name, mode in ASSISTANT_MODES.items():
+        if mode.model_profile not in models:
+            raise ConfigError(
+                f"Assistant mode '{mode_name}' defaults to model profile '{mode.model_profile}', "
+                "which is not defined under 'models'."
+            )
+
+
+def _validate_prompt_defaults(prompts: PromptSettings) -> None:
+    """Every mode's (extraction and assistant) repo-shipped default prompt
+    file must actually exist and be readable - fail the process at
+    startup, never a per-request 500. Runs unconditionally (not gated by
+    `_is_ai_configured`): these are committed files, not runtime config,
+    so a missing one is always a deployment defect worth catching
+    immediately - this mirrors the crash-at-import behavior the eager
+    Mode.prompt_template loading used to have before the Prompt Lab made
+    prompt loading lazy (see system/ai/prompt_registry.py)."""
+    registry = PromptRegistry(prompts.base_dir, prompts.runtime_dir, prompts.max_content_length)
+    for mode_name, mode in MODES.items():
+        if not registry.default_exists(mode_name, mode.default_prompt_version):
+            raise ConfigError(
+                f"Mode '{mode_name}' has no base prompt file for its default version "
+                f"'{mode.default_prompt_version}' under {prompts.base_dir / mode_name}."
+            )
+    for mode_name, mode in ASSISTANT_MODES.items():
+        subdir = f"assistant/{mode_name}"
+        if not registry.default_exists(subdir, mode.default_prompt_version):
+            raise ConfigError(
+                f"Assistant mode '{mode_name}' has no base prompt file for its default version "
+                f"'{mode.default_prompt_version}' under {prompts.base_dir / subdir}."
+            )
+
+
 def _validate_client_overrides(clients: dict[str, ClientConfig], models: dict[str, ModelProfile]) -> None:
     for client in clients.values():
         for mode_name, profile_name in client.model_overrides.items():
@@ -252,7 +320,10 @@ def _validate_client_overrides(clients: dict[str, ClientConfig], models: dict[st
 def _is_ai_configured(raw_models: object, clients: dict[str, ClientConfig]) -> bool:
     if raw_models:
         return True
-    return any(client.services.ai or client.model_overrides for client in clients.values())
+    return any(
+        client.services.ai or client.services.assistant or client.model_overrides
+        for client in clients.values()
+    )
 
 
 def validate_ai_config(settings: Settings) -> None:
@@ -261,10 +332,12 @@ def validate_ai_config(settings: Settings) -> None:
     Raises ConfigError on the first inconsistency found. Intended to be
     called once at startup (see load_settings()) - a broken AI config
     must prevent the process from starting, not surface as a per-request
-    500 the first time a client happens to call /analyze.
+    500 the first time a client happens to call /analyze or
+    /assistant/query.
     """
     _validate_model_profile_shapes(settings.models)
     _validate_mode_routing(settings.models)
+    _validate_assistant_mode_routing(settings.models)
     _validate_client_overrides(settings.clients, settings.models)
 
 
@@ -302,6 +375,15 @@ def load_settings() -> Settings:
     raw_ollama = raw.get("ollama") or {}
     ollama = OllamaSettings(base_url=os.environ.get("OLLAMA_URL", raw_ollama.get("base_url", "")))
 
+    raw_prompts = raw.get("prompts") or {}
+    prompts_base_dir = raw_prompts.get("base_dir")
+    prompts_runtime_dir = raw_prompts.get("runtime_dir")
+    prompts = PromptSettings(
+        base_dir=Path(prompts_base_dir) if prompts_base_dir else DEFAULT_PROMPTS_BASE_DIR,
+        runtime_dir=Path(prompts_runtime_dir) if prompts_runtime_dir else DEFAULT_PROMPTS_RUNTIME_DIR,
+        max_content_length=int(raw_prompts.get("max_content_length", DEFAULT_PROMPT_MAX_CONTENT_LENGTH)),
+    )
+
     raw_models = raw.get("models")
     models = _parse_model_profiles(raw_models)
 
@@ -315,11 +397,21 @@ def load_settings() -> Settings:
             services=ClientServices(
                 documents=bool(raw_services.get("documents", False)),
                 ai=bool(raw_services.get("ai", False)),
+                prompt_lab=bool(raw_services.get("prompt_lab", False)),
+                assistant=bool(raw_services.get("assistant", False)),
             ),
             model_overrides=_parse_model_overrides(client_id, raw_client.get("model_overrides")),
         )
 
-    settings = Settings(server=server, stirling=stirling, ollama=ollama, models=models, clients=clients)
+    settings = Settings(
+        server=server, stirling=stirling, ollama=ollama, prompts=prompts, models=models, clients=clients
+    )
+
+    # Unconditional (see _validate_prompt_defaults docstring) - unlike
+    # validate_ai_config() below, this isn't about whether AI is
+    # configured, it's "are the repo-shipped prompt files this process
+    # ships with actually intact".
+    _validate_prompt_defaults(prompts)
 
     if _is_ai_configured(raw_models, clients):
         validate_ai_config(settings)

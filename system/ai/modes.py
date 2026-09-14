@@ -2,11 +2,10 @@
 
 Clients never choose a prompt, a model, or a schema directly - they only
 ever name one of these pre-registered, server-controlled modes. This is
-the single place that maps a mode name to its versioned prompt template,
-its response JSON Schema, and its *default* model profile. Adding a mode
-means adding an entry here plus its prompt/schema files under
-system/prompts/ - nothing else in the request/response pipeline needs to
-change.
+the single place that maps a mode name to its response JSON Schema and
+its *default* model profile/prompt version. Adding a mode means adding an
+entry here plus its schema/prompt files under system/prompts/ - nothing
+else in the request/response pipeline needs to change.
 
 `model_profile` here is a profile NAME (e.g. "light"), never a concrete
 model - "the client selects a task, DocPipe selects the model" holds one
@@ -18,6 +17,17 @@ this default (config.py's ClientConfig.model_overrides) and the final
 name -> ModelProfile lookup both happen in system/ai/resolver.py - this
 file only defines the registry, not the routing/override logic, so that
 logic exists in exactly one place.
+
+Prompt TEXT is intentionally not loaded here (V2.2, Prompt Lab): only
+`default_prompt_version` is - the version this mode falls back to before
+anyone has ever activated a different one via the Lab, and the version
+whose base file system/ai/config.py's startup check requires to actually
+exist. The active version and its content are resolved per-request by
+system/ai/prompt_registry.py, never cached at import time - see
+docs/prompt-lab.md. The response schema, by contrast, is NOT
+Lab-editable (see that doc's "Not implemented") and is loaded eagerly
+here exactly as before - a broken/missing schema.json must still crash
+the process at startup, not surface as a per-request 500.
 """
 
 from __future__ import annotations
@@ -32,8 +42,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 @dataclass(frozen=True)
 class Mode:
     name: str
-    prompt_version: str
-    prompt_template: str
+    default_prompt_version: str
     response_schema: dict
     max_input_length: int
     # Default model profile NAME for this mode (see module docstring).
@@ -42,15 +51,13 @@ class Mode:
 
 
 def _load_mode(
-    name: str, prompt_version: str, max_input_length: int, model_profile: str, description: str
+    name: str, default_prompt_version: str, max_input_length: int, model_profile: str, description: str
 ) -> Mode:
-    mode_dir = PROMPTS_DIR / name
-    prompt_template = (mode_dir / f"{prompt_version}.txt").read_text(encoding="utf-8")
-    response_schema = json.loads((mode_dir / "schema.json").read_text(encoding="utf-8"))
+    schema_path = PROMPTS_DIR / name / "schema.json"
+    response_schema = json.loads(schema_path.read_text(encoding="utf-8"))
     return Mode(
         name=name,
-        prompt_version=prompt_version,
-        prompt_template=prompt_template,
+        default_prompt_version=default_prompt_version,
         response_schema=response_schema,
         max_input_length=max_input_length,
         model_profile=model_profile,

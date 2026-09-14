@@ -30,6 +30,15 @@ STATUS_BY_CODE: dict[str, int] = {
     # Should only ever happen if the running config drifted from what
     # config.py's startup validation checked - never a normal client error.
     "model_profile_unavailable": 502,
+    # Prompt Lab (V2.2)
+    "prompt_lab_disabled": 403,
+    "unknown_prompt_version": 404,
+    "invalid_prompt_version": 400,
+    "prompt_version_exists": 409,
+    "invalid_prompt": 400,
+    "prompt_too_large": 413,
+    # Assistant routing foundation (V2.2)
+    "assistant_disabled": 403,
 }
 
 

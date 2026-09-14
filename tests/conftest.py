@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,6 +11,7 @@ from system.config import (
     ClientServices,
     ModelProfile,
     OllamaSettings,
+    PromptSettings,
     ServerSettings,
     Settings,
     StirlingSettings,
@@ -21,6 +24,11 @@ DISABLED_KEY = "disabled-key"
 AI_KEY = "ai-key"
 NO_AI_KEY = "no-ai-key"
 AI_OVERRIDE_KEY = "ai-override-key"
+# Prompt Lab (V2.2)
+LAB_KEY = "lab-key"  # prompt_lab + ai - full Lab access, including /lab/analyze
+LAB_NO_AI_KEY = "lab-no-ai-key"  # prompt_lab only, no ai - can list/load/save/activate but not /lab/analyze
+# Assistant routing foundation (V2.2)
+ASSISTANT_KEY = "assistant-key"
 
 MAX_FILE_SIZE_MB = 1
 
@@ -141,13 +149,20 @@ TEST_MODEL_PROFILES = {
 }
 
 
-def _build_test_settings() -> Settings:
+def _build_test_settings(runtime_prompts_dir: Path) -> Settings:
     return Settings(
         server=ServerSettings(max_file_size_mb=MAX_FILE_SIZE_MB),
         stirling=StirlingSettings(
             base_url="http://stirling.test", api_key="stirling-secret", timeout_seconds=5
         ),
         ollama=OllamaSettings(base_url="http://ollama.test"),
+        # base_dir deliberately left at its default (the real
+        # system/prompts/) - the repo's real v1.txt fixtures are exactly
+        # what a test wants to see as "already there". Only runtime_dir is
+        # swapped to a fresh per-test tmp_path so a Lab save/activate
+        # during a test can never write into the real repository's
+        # runtime-prompts/ directory.
+        prompts=PromptSettings(runtime_dir=runtime_prompts_dir),
         models=dict(TEST_MODEL_PROFILES),
         clients={
             "enabled-client": ClientConfig(
@@ -189,12 +204,30 @@ def _build_test_settings() -> Settings:
                 # is bumped to "standard" for that one mode only.
                 model_overrides={"maintenance_extraction": "standard"},
             ),
+            "lab-client": ClientConfig(
+                client_id="lab-client",
+                enabled=True,
+                api_key=LAB_KEY,
+                services=ClientServices(documents=True, ai=True, prompt_lab=True),
+            ),
+            "lab-no-ai-client": ClientConfig(
+                client_id="lab-no-ai-client",
+                enabled=True,
+                api_key=LAB_NO_AI_KEY,
+                services=ClientServices(documents=True, ai=False, prompt_lab=True),
+            ),
+            "assistant-client": ClientConfig(
+                client_id="assistant-client",
+                enabled=True,
+                api_key=ASSISTANT_KEY,
+                services=ClientServices(documents=True, ai=True, assistant=True),
+            ),
         },
     )
 
 
 @pytest.fixture
-def fake_stirling_holder(monkeypatch):
+def fake_stirling_holder(monkeypatch, tmp_path):
     holder: dict = {}
 
     def factory(settings):
@@ -203,7 +236,9 @@ def fake_stirling_holder(monkeypatch):
         return instance
 
     monkeypatch.setattr(main_module, "StirlingClient", factory)
-    monkeypatch.setattr(main_module, "load_settings", _build_test_settings)
+    monkeypatch.setattr(
+        main_module, "load_settings", lambda: _build_test_settings(tmp_path / "runtime-prompts")
+    )
     return holder
 
 

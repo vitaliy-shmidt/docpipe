@@ -2,6 +2,11 @@
 .env
 config.yaml
 
+# Prompt Lab (V2.2) - locally saved/activated prompt versions, never
+# committed (a real deployment mounts this as a persistent volume
+# instead - see docker-compose.yml and docs/prompt-lab.md)
+runtime-prompts/
+
 # VS Code multi-root workspace (local dev convenience only)
 docpipe.code-workspace
 

@@ -21,9 +21,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from system import VERSION
+from system.ai.prompt_registry import PromptRegistry
 from system.config import load_settings
 from system.errors import STATUS_BY_CODE, DocPipeError
-from system.routes import analyze, capabilities, documents, health
+from system.routes import analyze, assistant, capabilities, documents, health, lab
 from system.services.ollama import OllamaClient
 from system.services.stirling import StirlingClient
 
@@ -37,6 +38,9 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.stirling_client = StirlingClient(settings.stirling)
     app.state.ollama_client = OllamaClient(settings.ollama.base_url)
+    app.state.prompt_registry = PromptRegistry(
+        settings.prompts.base_dir, settings.prompts.runtime_dir, settings.prompts.max_content_length
+    )
     yield
     app.state.stirling_client.close()
     app.state.ollama_client.close()
@@ -48,6 +52,8 @@ app.include_router(health.router)
 app.include_router(capabilities.router)
 app.include_router(documents.router)
 app.include_router(analyze.router)
+app.include_router(lab.router)
+app.include_router(assistant.router)
 
 
 @app.middleware("http")

@@ -61,3 +61,15 @@ def require_ai_service(client: ClientConfig) -> None:
     """Raise DocPipeError("ai_disabled") unless ai is enabled for the client."""
     if not client.services.ai:
         raise DocPipeError("ai_disabled", "The AI analysis service is not enabled for this client.")
+
+
+def require_prompt_lab_service(client: ClientConfig) -> None:
+    """Raise DocPipeError("prompt_lab_disabled") unless prompt_lab is enabled."""
+    if not client.services.prompt_lab:
+        raise DocPipeError("prompt_lab_disabled", "The prompt lab is not enabled for this client.")
+
+
+def require_assistant_service(client: ClientConfig) -> None:
+    """Raise DocPipeError("assistant_disabled") unless assistant is enabled."""
+    if not client.services.assistant:
+        raise DocPipeError("assistant_disabled", "The assistant service is not enabled for this client.")

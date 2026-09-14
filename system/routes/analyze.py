@@ -10,7 +10,16 @@ Architecture principle: the client selects a *mode* (a task); DocPipe -
 never the client - selects the *model*, via system/ai/resolver.py. The
 request schema (AnalyzeRequest) has no model/model_profile/provider/
 temperature/timeout/prompt field at all, so there is nothing for a client
-to override even if it tried.
+to override even if it tried - not even a prompt, ever (see task V2.2
+requirement: a draft prompt is exclusively a /api/v1/lab/analyze thing,
+system/routes/lab.py; this endpoint only ever runs the mode's currently
+*active*, server-controlled prompt version).
+
+The prompt itself is resolved fresh on every request via
+system/ai/prompt_registry.py (mode -> active version -> file content) -
+never cached, never baked in at import time, so activating a new version
+through the Prompt Lab takes effect on the very next call here with no
+restart (see docs/prompt-lab.md).
 """
 
 from __future__ import annotations
@@ -52,7 +61,11 @@ def analyze(
 
     settings = request.app.state.settings
     profile_name, profile = resolve_model_profile(mode, client, settings)
-    prompt = build_prompt(mode, body.context, body.text)
+
+    registry = request.app.state.prompt_registry
+    prompt_version = registry.resolve_active_version(mode.name, mode.default_prompt_version)
+    prompt_template = registry.load_prompt(mode.name, prompt_version)
+    prompt = build_prompt(prompt_template, body.context, body.text)
 
     # Same request_id as the generic access-log line (main.py middleware),
     # for correlation - but with the AI-specific dimensions that line
@@ -64,6 +77,7 @@ def analyze(
         "mode": mode.name,
         "model_profile": profile_name,
         "model": profile.model,
+        "prompt_version": prompt_version,
         "input_length": len(body.text),
     }
     started_at = time.monotonic()
@@ -79,8 +93,8 @@ def analyze(
         duration_ms = round((time.monotonic() - started_at) * 1000, 1)
         logger.info(
             "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
-            "model_profile=%(model_profile)s model=%(model)s input_length=%(input_length)s "
-            "status=%(status)s duration_ms=%(duration_ms)s",
+            "model_profile=%(model_profile)s model=%(model)s prompt_version=%(prompt_version)s "
+            "input_length=%(input_length)s status=%(status)s duration_ms=%(duration_ms)s",
             {**log_fields, "status": exc.code, "duration_ms": duration_ms},
         )
         raise
@@ -88,8 +102,8 @@ def analyze(
     duration_ms = round((time.monotonic() - started_at) * 1000, 1)
     logger.info(
         "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
-        "model_profile=%(model_profile)s model=%(model)s input_length=%(input_length)s "
-        "status=success duration_ms=%(duration_ms)s",
+        "model_profile=%(model_profile)s model=%(model)s prompt_version=%(prompt_version)s "
+        "input_length=%(input_length)s status=success duration_ms=%(duration_ms)s",
         {**log_fields, "duration_ms": duration_ms},
     )
 
@@ -99,7 +113,7 @@ def analyze(
             mode=mode.name,
             model_profile=profile_name,
             model=profile.model,
-            prompt_version=mode.prompt_version,
+            prompt_version=prompt_version,
             result=result,
         ),
     )

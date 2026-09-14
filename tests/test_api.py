@@ -50,7 +50,7 @@ def test_capabilities_valid_key(client):
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["services"] == {"documents": True, "ai": False}
+    assert body["services"] == {"documents": True, "ai": False, "prompt_lab": False, "assistant": False}
     assert "extract_text" in body["features"]
     # OCR is on by default (see config.py DEFAULT_OCR_ENABLED) - the test
     # settings don't override it, so it must be advertised too.
