@@ -102,8 +102,9 @@ SAMPLE_MAINTENANCE_RESULT = {
 class FakeOllamaClient:
     """Test double standing in for the real Ollama HTTP client."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, keep_alive: str | None = None) -> None:
         self.base_url = base_url
+        self.keep_alive = keep_alive
         self.mode = "success"
         self.result = dict(SAMPLE_MAINTENANCE_RESULT)
         self.calls = 0
@@ -111,18 +112,39 @@ class FakeOllamaClient:
         self.last_model = None
         self.last_timeout_seconds = None
         self.last_temperature = None
+        # Ollama Keep-Alive/Timing pass: a route calls generate_structured()
+        # with timing={} and reads the dict back afterward, identical to the
+        # real OllamaClient - fake fixed values keep route-level tests
+        # deterministic (no real wall-clock duration).
+        self.fake_primary_duration_ms = 12.3
+        self.fake_repair_duration_ms = 4.5
 
     def close(self) -> None:
         pass
 
     def generate_structured(
-        self, prompt: str, schema: dict, *, model: str, timeout_seconds: float, temperature: float
+        self,
+        prompt: str,
+        schema: dict,
+        *,
+        model: str,
+        timeout_seconds: float,
+        temperature: float,
+        timing: dict | None = None,
     ) -> dict:
         self.calls += 1
         self.last_prompt = prompt
         self.last_model = model
         self.last_timeout_seconds = timeout_seconds
         self.last_temperature = temperature
+        if timing is not None:
+            timing["ollama_primary_duration_ms"] = self.fake_primary_duration_ms
+            repair_used = self.mode == "invalid_response"
+            if repair_used:
+                timing["ollama_repair_duration_ms"] = self.fake_repair_duration_ms
+            timing["ollama_duration_ms"] = round(
+                self.fake_primary_duration_ms + (self.fake_repair_duration_ms if repair_used else 0.0), 1
+            )
         if self.mode == "success":
             return self.result
         if self.mode == "unavailable":
@@ -246,8 +268,8 @@ def fake_stirling_holder(monkeypatch, tmp_path):
 def fake_ollama_holder(monkeypatch):
     holder: dict = {}
 
-    def factory(base_url):
-        instance = FakeOllamaClient(base_url)
+    def factory(base_url, keep_alive=None):
+        instance = FakeOllamaClient(base_url, keep_alive=keep_alive)
         holder["client"] = instance
         return instance
 

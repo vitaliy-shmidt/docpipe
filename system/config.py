@@ -33,6 +33,7 @@ compatibility shim for a format that was never used in production.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,6 +46,25 @@ from system.assistant.modes import ASSISTANT_MODES
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_MAX_FILE_SIZE_MB = 25
 DEFAULT_STIRLING_TIMEOUT_SECONDS = 90
+
+# Ollama Keep-Alive tuning pass (see docs/staging-deployment.md "Ollama
+# Keep-Alive"). Real staging observation: the deployed qwen2.5:1.5b-instruct
+# model unloads from Ollama ~4 minutes after last use (Ollama's own default),
+# forcing a cold reload (and a request that can exceed HubDix's HTTP
+# timeout) on the next call. A conservative *code* default of "5m" is used
+# here deliberately - `config.example.yaml` documents the recommended "15m"
+# production override, but a config that omits `ollama.keep_alive` entirely
+# (e.g. an existing deployment that hasn't been touched yet) should not
+# silently jump to the longer, more RAM-hungry value (see task §4/§48 "kein
+# Forever", 8 GB RAM budget).
+DEFAULT_OLLAMA_KEEP_ALIVE = "5m"
+# Task §5: a positive Go-style duration ("30s"/"5m"/"15m"/"1h") or a plain
+# positive integer (seconds, also accepted by Ollama's API). Deliberately
+# excludes 0 and negative values (Ollama-specific meanings: "unload
+# immediately" / "keep forever") - neither is a documented, intentional
+# choice for this deployment (task §48 "kein Forever"), so a config author
+# who wants either must not be able to reach it through a typo.
+OLLAMA_KEEP_ALIVE_PATTERN = re.compile(r"^[1-9][0-9]*(s|m|h)?$")
 
 # See system/ai/prompt_registry.py. base_dir defaults to the exact same
 # directory system/ai/modes.py has always loaded schemas from - no second
@@ -104,9 +124,16 @@ class StirlingSettings:
 
 @dataclass(frozen=True)
 class OllamaSettings:
-    """Provider-wide Ollama connection settings. No model lives here."""
+    """Provider-wide Ollama connection settings. No model lives here.
+
+    `keep_alive` is infrastructure config, not a per-request/per-client
+    choice (task §6/§8) - it is resolved once here and handed to the single
+    OllamaClient instance at startup (system/main.py), which then applies it
+    identically to every /api/generate call (analyze and assistant alike,
+    no route-specific duplication)."""
 
     base_url: str
+    keep_alive: str = DEFAULT_OLLAMA_KEEP_ALIVE
 
 
 @dataclass(frozen=True)
@@ -373,7 +400,17 @@ def load_settings() -> Settings:
     )
 
     raw_ollama = raw.get("ollama") or {}
-    ollama = OllamaSettings(base_url=os.environ.get("OLLAMA_URL", raw_ollama.get("base_url", "")))
+    raw_keep_alive = raw_ollama.get("keep_alive")
+    keep_alive = DEFAULT_OLLAMA_KEEP_ALIVE if raw_keep_alive is None else str(raw_keep_alive)
+    if not OLLAMA_KEEP_ALIVE_PATTERN.match(keep_alive):
+        raise ConfigError(
+            f"ollama.keep_alive has an invalid value {keep_alive!r} - expected a positive Ollama "
+            "duration such as '30s', '5m', '15m', '1h', or a plain positive integer number of seconds."
+        )
+    ollama = OllamaSettings(
+        base_url=os.environ.get("OLLAMA_URL", raw_ollama.get("base_url", "")),
+        keep_alive=keep_alive,
+    )
 
     raw_prompts = raw.get("prompts") or {}
     prompts_base_dir = raw_prompts.get("base_dir")

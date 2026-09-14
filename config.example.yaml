@@ -26,6 +26,24 @@ stirling:
 # below and README.md "AI analysis" for the full picture.
 ollama:
   base_url: "http://ollama:11434"
+  # Ollama Keep-Alive tuning pass (see docs/staging-deployment.md "Ollama
+  # Keep-Alive"). How long Ollama keeps a model resident in memory after
+  # the last request, so a follow-up question doesn't pay the full cold-load
+  # cost again. Sent identically on every /api/generate call this process
+  # makes (analyze AND assistant - system/services/ollama.py) - not a
+  # per-request/per-client setting. Omit this key entirely to fall back to
+  # a conservative code default ("5m", see system/config.py
+  # DEFAULT_OLLAMA_KEEP_ALIVE) rather than silently jumping to the longer
+  # value below. Accepts a positive Go-style duration ("30s"/"5m"/"15m"/
+  # "1h") or a plain positive integer number of seconds - never 0 or a
+  # negative value (Ollama's own "unload immediately"/"keep forever"
+  # meanings - deliberately not offered here, see README "Model profiles").
+  # "15m" is the recommended production value for an 8 GB RAM box running
+  # a single ~1-2 GB instruct model - long enough to survive normal
+  # question-to-question gaps, short enough to still free the RAM during
+  # genuinely idle periods. Re-evaluate under real RAM/swap pressure (see
+  # docs/staging-deployment.md "RAM awareness") before raising it further.
+  keep_alive: "15m"
 
 # Optional (V2.2) - see docs/prompt-lab.md. Omit this whole block entirely
 # for the defaults shown here. base_dir is the repo-shipped prompts
@@ -48,16 +66,43 @@ prompts:
 # deliberately provided even though no active mode defaults to it yet
 # (see README.md "Model profiles").
 models:
+  # Timeout tuning pass (task §24/§25): real staging measurements against
+  # qwen2.5:1.5b-instruct for assistant modes that default to "light"
+  # (maintenance_question/inspection_question/contract_question/
+  # general_hotel_question) came in at ~57-58s - uncomfortably close to the
+  # previous 60s ceiling (a single slow/cold call could already have hit
+  # ai_timeout here, independent of anything on the HubDix side). Bumped to
+  # 90s for headroom. Deliberately NOT bumped to match HubDix's 180s
+  # assistant HTTP timeout - see "standard" below for why that distinction
+  # matters, and README "Model profiles" for how this ceiling relates to a
+  # calling client's own timeout.
   light:
     provider: ollama
     model: "your-small-model"
-    timeout_seconds: 60
+    timeout_seconds: 90
     temperature: 0
 
+  # hotel_health_summary/document_question (the two "standard"-profile
+  # assistant modes, see system/assistant/modes.py) share this profile with
+  # inspection_extraction. Bumped from 120s to 150s - real staging
+  # measurements for hotel_health_summary landed at 28-58s per request, but
+  # a cold Ollama load (see "Ollama Keep-Alive" above) can meaningfully add
+  # to that. Deliberately kept BELOW HubDix's new 180s assistant HTTP
+  # timeout (see hubdix-light's DocumentProcessingClient::assistantQuery()):
+  # DocPipe should reach its own timeout and return a clean ai_timeout
+  # (504) before HubDix's client-side timeout fires, so a genuinely stuck
+  # request still surfaces as a normal, mapped error instead of both sides
+  # racing to the same wall-clock cutoff. Not pushed further just to match
+  # 180s exactly, and not split into a separate assistant-only profile in
+  # this pass - inspection_extraction benefits from the same higher ceiling
+  # at essentially no cost (a longer timeout never slows down an already-
+  # fast successful call, it only changes how long a stuck one is waited
+  # on) - re-visit only if inspection_extraction and hotel_health_summary
+  # ever need genuinely different ceilings.
   standard:
     provider: ollama
     model: "your-medium-model"
-    timeout_seconds: 120
+    timeout_seconds: 150
     temperature: 0
 
   heavy:

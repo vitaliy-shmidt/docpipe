@@ -341,3 +341,53 @@ def test_unknown_client_override_mode_fails_validation():
     )
     with pytest.raises(ConfigError, match="not_a_real_mode"):
         validate_ai_config(_settings(models=VALID_PROFILES, clients={"c1": client}))
+
+
+# --- Ollama keep_alive (Keep-Alive/Timing pass, task §3-§5/§29) -------------
+
+
+def _config_with_ollama_block(ollama_block: str) -> str:
+    return f"""
+stirling:
+  base_url: "http://stirling:8080"
+  api_key: ""
+  timeout_seconds: 90
+
+ollama:
+  base_url: "http://ollama:11434"
+{ollama_block}
+"""
+
+
+def test_keep_alive_missing_defaults_to_5m(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_config_with_ollama_block(""), encoding="utf-8")
+    monkeypatch.setenv("DOCPIPE_CONFIG", str(config_path))
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+    settings = load_settings()
+
+    assert settings.ollama.keep_alive == "5m"
+
+
+@pytest.mark.parametrize("value", ["30s", "5m", "15m", "1h", "300"])
+def test_keep_alive_accepts_valid_values(tmp_path, monkeypatch, value):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_config_with_ollama_block(f'  keep_alive: "{value}"'), encoding="utf-8")
+    monkeypatch.setenv("DOCPIPE_CONFIG", str(config_path))
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+    settings = load_settings()
+
+    assert settings.ollama.keep_alive == value
+
+
+@pytest.mark.parametrize("value", ["0", "-5m", "forever", "15minutes", "", "1.5m", "-1"])
+def test_keep_alive_rejects_invalid_values(tmp_path, monkeypatch, value):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_config_with_ollama_block(f'  keep_alive: "{value}"'), encoding="utf-8")
+    monkeypatch.setenv("DOCPIPE_CONFIG", str(config_path))
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+    with pytest.raises(ConfigError, match="keep_alive"):
+        load_settings()

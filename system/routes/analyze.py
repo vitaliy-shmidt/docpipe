@@ -24,6 +24,7 @@ restart (see docs/prompt-lab.md).
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -70,7 +71,10 @@ def analyze(
     # Same request_id as the generic access-log line (main.py middleware),
     # for correlation - but with the AI-specific dimensions that line
     # doesn't carry. Never the document text, the prompt, or the model
-    # output itself.
+    # output itself. Timing Metrics pass (task §15): same shared
+    # OllamaClient timing mechanism as /assistant/query above - no second,
+    # analyze-specific implementation.
+    context_chars = len(json.dumps(body.context, ensure_ascii=False, default=str))
     log_fields = {
         "request_id": getattr(request.state, "request_id", None),
         "client_id": client.client_id,
@@ -78,8 +82,10 @@ def analyze(
         "model_profile": profile_name,
         "model": profile.model,
         "prompt_version": prompt_version,
-        "input_length": len(body.text),
+        "input_chars": len(body.text),
+        "context_chars": context_chars,
     }
+    timing: dict = {}
     started_at = time.monotonic()
     try:
         result = request.app.state.ollama_client.generate_structured(
@@ -88,23 +94,39 @@ def analyze(
             model=profile.model,
             timeout_seconds=profile.timeout_seconds,
             temperature=profile.temperature,
+            timing=timing,
         )
     except DocPipeError as exc:
-        duration_ms = round((time.monotonic() - started_at) * 1000, 1)
+        total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
         logger.info(
             "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
             "model_profile=%(model_profile)s model=%(model)s prompt_version=%(prompt_version)s "
-            "input_length=%(input_length)s status=%(status)s duration_ms=%(duration_ms)s",
-            {**log_fields, "status": exc.code, "duration_ms": duration_ms},
+            "input_chars=%(input_chars)s context_chars=%(context_chars)s status=%(status)s "
+            "repair_used=%(repair_used)s ollama_duration_ms=%(ollama_duration_ms)s "
+            "total_duration_ms=%(total_duration_ms)s",
+            {
+                **log_fields,
+                "status": exc.code,
+                "repair_used": "ollama_repair_duration_ms" in timing,
+                "ollama_duration_ms": timing.get("ollama_duration_ms"),
+                "total_duration_ms": total_duration_ms,
+            },
         )
         raise
 
-    duration_ms = round((time.monotonic() - started_at) * 1000, 1)
+    total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
     logger.info(
         "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
         "model_profile=%(model_profile)s model=%(model)s prompt_version=%(prompt_version)s "
-        "input_length=%(input_length)s status=success duration_ms=%(duration_ms)s",
-        {**log_fields, "duration_ms": duration_ms},
+        "input_chars=%(input_chars)s context_chars=%(context_chars)s status=success "
+        "repair_used=%(repair_used)s ollama_duration_ms=%(ollama_duration_ms)s "
+        "total_duration_ms=%(total_duration_ms)s",
+        {
+            **log_fields,
+            "repair_used": "ollama_repair_duration_ms" in timing,
+            "ollama_duration_ms": timing.get("ollama_duration_ms"),
+            "total_duration_ms": total_duration_ms,
+        },
     )
 
     return AnalyzeResponse(

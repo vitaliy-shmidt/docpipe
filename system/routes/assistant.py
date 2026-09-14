@@ -80,6 +80,12 @@ def assistant_query(
     prompt_template = registry.load_prompt(subdir, prompt_version)
     prompt = build_assistant_prompt(prompt_template, body.context, question)
 
+    # Timing Metrics pass (task §11-§14): metadata-only, never question/
+    # context/answer/prompt content. `timing` is populated in place by
+    # OllamaClient.generate_structured() (system/services/ollama.py) with
+    # ollama_duration_ms (+ optional load/eval breakdown) - a single shared
+    # mechanism also used by /documents/analyze below, not a second
+    # assistant-specific timing implementation.
     log_fields = {
         "request_id": getattr(request.state, "request_id", None),
         "client_id": client.client_id,
@@ -88,8 +94,10 @@ def assistant_query(
         "model_profile": profile_name,
         "model": profile.model,
         "prompt_version": prompt_version,
-        "question_length": len(question),
+        "question_chars": len(question),
+        "context_chars": len(serialized_context),
     }
+    timing: dict = {}
     started_at = time.monotonic()
     try:
         result = request.app.state.ollama_client.generate_structured(
@@ -98,25 +106,37 @@ def assistant_query(
             model=profile.model,
             timeout_seconds=profile.timeout_seconds,
             temperature=profile.temperature,
+            timing=timing,
         )
     except DocPipeError as exc:
-        duration_ms = round((time.monotonic() - started_at) * 1000, 1)
+        total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
         logger.info(
             "request_id=%(request_id)s client_id=%(client_id)s assistant_mode=%(assistant_mode)s "
             "matched_rule=%(matched_rule)s model_profile=%(model_profile)s model=%(model)s "
-            "prompt_version=%(prompt_version)s question_length=%(question_length)s "
-            "status=%(status)s duration_ms=%(duration_ms)s",
-            {**log_fields, "status": exc.code, "duration_ms": duration_ms},
+            "prompt_version=%(prompt_version)s question_chars=%(question_chars)s "
+            "context_chars=%(context_chars)s status=%(status)s "
+            "ollama_duration_ms=%(ollama_duration_ms)s total_duration_ms=%(total_duration_ms)s",
+            {
+                **log_fields,
+                "status": exc.code,
+                "ollama_duration_ms": timing.get("ollama_duration_ms"),
+                "total_duration_ms": total_duration_ms,
+            },
         )
         raise
 
-    duration_ms = round((time.monotonic() - started_at) * 1000, 1)
+    total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
     logger.info(
         "request_id=%(request_id)s client_id=%(client_id)s assistant_mode=%(assistant_mode)s "
         "matched_rule=%(matched_rule)s model_profile=%(model_profile)s model=%(model)s "
-        "prompt_version=%(prompt_version)s question_length=%(question_length)s "
-        "status=success duration_ms=%(duration_ms)s",
-        {**log_fields, "duration_ms": duration_ms},
+        "prompt_version=%(prompt_version)s question_chars=%(question_chars)s "
+        "context_chars=%(context_chars)s status=success "
+        "ollama_duration_ms=%(ollama_duration_ms)s total_duration_ms=%(total_duration_ms)s",
+        {
+            **log_fields,
+            "ollama_duration_ms": timing.get("ollama_duration_ms"),
+            "total_duration_ms": total_duration_ms,
+        },
     )
 
     return AssistantQueryResponse(

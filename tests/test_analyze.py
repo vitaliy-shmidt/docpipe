@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import jsonschema
 
 from system.ai.modes import MODES
@@ -287,3 +289,43 @@ def test_capabilities_hides_ai_modes_for_non_ai_client(client):
     assert body["services"]["ai"] is False
     assert "analyze" not in body["features"]
     assert body["ai_modes"] is None
+
+
+# --- Timing Metrics pass (task §11/§15/§33) ---------------------------------
+
+
+def test_analyze_success_log_line_has_timing_and_no_content(client, caplog):
+    with caplog.at_level(logging.INFO, logger="docpipe.ai"):
+        response = _analyze(
+            client, context={"hotel_name": "SECRET-HOTEL-NAME"}, text="UNIQUE-DOCUMENT-TEXT-TOKEN"
+        )
+    assert response.status_code == 200
+
+    [record] = [r for r in caplog.records if r.name == "docpipe.ai"]
+    message = record.getMessage()
+
+    assert "status=success" in message
+    assert "mode=maintenance_extraction" in message
+    assert "model=" in message
+    assert "model_profile=" in message
+    assert "prompt_version=" in message
+    assert "input_chars=" in message
+    assert "context_chars=" in message
+    assert "repair_used=False" in message
+    assert "ollama_duration_ms=" in message
+    assert "total_duration_ms=" in message
+    # Task §15/§33: never the input document text or context content.
+    assert "UNIQUE-DOCUMENT-TEXT-TOKEN" not in message
+    assert "SECRET-HOTEL-NAME" not in message
+
+
+def test_analyze_error_log_line_reports_status_and_timing(client, caplog):
+    client.fake_ollama["client"].mode = "unavailable"
+    with caplog.at_level(logging.INFO, logger="docpipe.ai"):
+        response = _analyze(client)
+    assert response.status_code == 502
+
+    [record] = [r for r in caplog.records if r.name == "docpipe.ai"]
+    message = record.getMessage()
+    assert "status=ai_unavailable" in message
+    assert "total_duration_ms=" in message

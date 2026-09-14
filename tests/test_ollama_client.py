@@ -176,3 +176,127 @@ def test_generate_structured_passes_resolved_timeout_to_http_call():
 
     assert captured_kwargs["timeout"] == 42
     assert captured_kwargs["url"] == "http://ollama.test/api/generate"
+
+
+# --- Ollama Keep-Alive (task §3/§7/§8/§30/§31) ------------------------------
+
+
+def test_keep_alive_included_in_request_body_when_configured():
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["keep_alive"] == "15m"
+        return _ollama_response(json.dumps({"foo": "bar"}))
+
+    client = OllamaClient("http://ollama.test", keep_alive="15m")
+    client._client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+    _generate(client, "prompt")
+
+
+def test_keep_alive_omitted_from_request_body_when_not_configured():
+    def handler(request):
+        body = json.loads(request.content)
+        assert "keep_alive" not in body
+        return _ollama_response(json.dumps({"foo": "bar"}))
+
+    client = OllamaClient("http://ollama.test")
+    client._client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+    _generate(client, "prompt")
+
+
+def test_keep_alive_sent_identically_on_repair_call_too():
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        if len(bodies) == 1:
+            return _ollama_response("not valid json")
+        return _ollama_response(json.dumps({"foo": "fixed"}))
+
+    client = OllamaClient("http://ollama.test", keep_alive="15m")
+    client._client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+    _generate(client, "prompt")
+
+    assert len(bodies) == 2
+    assert bodies[0]["keep_alive"] == bodies[1]["keep_alive"] == "15m"
+
+
+# --- Timing metrics (task §11-§13/§16/§17/§32) ------------------------------
+
+
+def test_timing_dict_populated_on_first_try_success():
+    client = _make_client(lambda request: _ollama_response(json.dumps({"foo": "bar"})))
+    timing: dict = {}
+
+    _generate(client, "prompt", timing=timing)
+
+    assert timing["ollama_primary_duration_ms"] >= 0
+    assert "ollama_repair_duration_ms" not in timing
+    assert timing["ollama_duration_ms"] == timing["ollama_primary_duration_ms"]
+
+
+def test_timing_dict_records_primary_and_repair_separately():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return _ollama_response("not valid json")
+        return _ollama_response(json.dumps({"foo": "fixed"}))
+
+    client = _make_client(handler)
+    timing: dict = {}
+
+    _generate(client, "prompt", timing=timing)
+
+    assert "ollama_primary_duration_ms" in timing
+    assert "ollama_repair_duration_ms" in timing
+    assert timing["ollama_duration_ms"] == round(
+        timing["ollama_primary_duration_ms"] + timing["ollama_repair_duration_ms"], 1
+    )
+
+
+def test_timing_dict_untouched_when_not_requested():
+    """timing=None (the default) must not change behavior at all - existing
+    callers that don't pass it keep working exactly as before."""
+    client = _make_client(lambda request: _ollama_response(json.dumps({"foo": "bar"})))
+    result = _generate(client, "prompt")  # no timing kwarg
+    assert result == {"foo": "bar"}
+
+
+def test_timing_extracts_ollama_response_metrics_when_present():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "response": json.dumps({"foo": "bar"}),
+                "done": True,
+                "total_duration": 5_000_000_000,
+                "load_duration": 2_000_000_000,
+                "prompt_eval_duration": 1_000_000_000,
+                "eval_duration": 1_500_000_000,
+                "eval_count": 42,
+            },
+        )
+
+    client = _make_client(handler)
+    timing: dict = {}
+    _generate(client, "prompt", timing=timing)
+
+    assert timing["ollama_primary_load_ms"] == 2000.0
+    assert timing["ollama_primary_prompt_eval_ms"] == 1000.0
+    assert timing["ollama_primary_eval_ms"] == 1500.0
+    assert timing["ollama_primary_eval_count"] == 42
+
+
+def test_timing_missing_ollama_response_metrics_does_not_fail_request():
+    """Task §17: an Ollama version that omits load_duration/eval_duration/
+    etc. must still produce a successful result - these fields are read
+    defensively, never required."""
+    client = _make_client(lambda request: _ollama_response(json.dumps({"foo": "bar"})))
+    timing: dict = {}
+
+    result = _generate(client, "prompt", timing=timing)
+
+    assert result == {"foo": "bar"}
+    assert "ollama_primary_load_ms" not in timing
+    assert timing["ollama_primary_duration_ms"] >= 0

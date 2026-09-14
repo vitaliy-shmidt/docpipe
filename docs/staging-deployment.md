@@ -31,6 +31,9 @@ Minimum to decide/set before first deploy:
 - **Stirling URL**: `stirling.base_url`, reachable from the DocPipe host/container.
 - **Ollama URL**: `ollama.base_url`, reachable from the DocPipe host/container -
   only required if at least one client has `services.ai: true`.
+- **Ollama Keep-Alive**: `ollama.keep_alive` (recommended: `"15m"` in
+  production) - see "Ollama Keep-Alive" below for why this matters and how
+  to verify it after deploy.
 - **Model profiles**: `models.light` / `models.standard` (at minimum -
   these are the two currently-active modes' defaults; `models.heavy` is
   optional until a mode that defaults to it exists) - each pointing at a
@@ -65,6 +68,75 @@ here should show up immediately in the startup logs, not as a mysterious
 first-request 500. The same startup check also fails fast if a base
 prompt file itself is missing/unreadable (e.g. a botched image build) -
 this covers both extraction and assistant modes.
+
+## Ollama Keep-Alive
+
+**Purpose**: without an explicit `keep_alive`, Ollama unloads a model from
+memory a few minutes after the last request (observed in real staging use:
+~4 minutes for `qwen2.5:1.5b-instruct`). The next request then pays a full
+cold-load cost on top of normal generation time - real staging
+measurements against this deployment saw calls that would otherwise
+comfortably finish in 28-58s occasionally exceed a calling client's own
+HTTP timeout after a cold load. Setting `ollama.keep_alive` (recommended
+`"15m"` for an 8 GB box running one small resident model, see
+`config.example.yaml`) keeps the model warm across normal question-to-
+question gaps without holding it in memory indefinitely.
+
+**Example**:
+
+```yaml
+ollama:
+  base_url: "http://ollama:11434"
+  keep_alive: "15m"
+```
+
+**Requires a DocPipe restart** to take effect - config is only read once
+at process startup (see "Hot Config" - no runtime reload is implemented,
+and none is needed for a value that changes this rarely):
+
+```bash
+cd /root/n8n/docpipe
+git pull --ff-only
+cd /root/n8n
+docker compose build docpipe
+docker compose up -d docpipe
+```
+
+**Acceptance test** - trigger one assistant or analyze request, then check
+immediately:
+
+```bash
+docker exec ollama ollama ps
+```
+
+Expect a row for the configured model with `UNTIL` roughly matching the
+configured `keep_alive` from now (e.g. "~15 minutes from now" for
+`keep_alive: "15m"`) - not the previous ~4-minute default. Repeat the
+check at roughly 5 and 10 minutes after the request with no further
+traffic: the model must still be listed both times. After the full
+`keep_alive` window has elapsed with no further requests, the model
+disappearing from `ollama ps` again is expected and correct - `keep_alive`
+changes *when* Ollama's own eviction runs, it does not disable eviction
+(no forever-loaded model, no preload cron - see "RAM awareness" below and
+`README.md` "Ollama Keep-Alive").
+
+While the model is loaded, also check resource headroom on the same 8 GB
+box:
+
+```bash
+free -h
+docker stats --no-stream
+```
+
+If swap grows significantly or the box becomes unstable while the model is
+kept warm for the full 15 minutes, reduce `keep_alive` (e.g. to `"5m"` or
+`"10m"`) rather than leaving it at a value the box can't sustain.
+
+**Cold vs. warm request timing**: for the same question, a cold request
+(model not in `ollama ps`) will noticeably outlast a warm one immediately
+following it. Measure and note both `duration_ms` values when validating -
+treating the cold number as representative of normal operation
+overstates the real latency budget a calling client needs to plan around.
 
 ## Prompt Lab runtime directory (V2.2)
 
@@ -174,9 +246,11 @@ treating the slower response as a problem on its own.
 [ ] standard Profile funktioniert
 [ ] Schema Validation funktioniert
 [ ] Logs enthalten keine Dokumentinhalte
+[ ] Logs enthalten Timing-Metadaten (ollama_duration_ms/total_duration_ms) ohne Inhalte
+[ ] ollama.keep_alive gesetzt (empfohlen "15m") und per `ollama ps` verifiziert - nur falls ai/assistant genutzt wird
 [ ] RAM gemessen
 [ ] CPU gemessen
-[ ] Laufzeit gemessen
+[ ] Laufzeit gemessen (Cold vs. Warm Request)
 [ ] runtime-prompts/ beschreibbar (richtiger UID/Mount) - nur falls prompt_lab genutzt wird
 [ ] Prompt Hot Reload funktioniert ohne Neustart - nur falls prompt_lab genutzt wird
 [ ] Assistant Smoke Test liefert nur belegte Fakten - nur falls assistant genutzt wird
@@ -258,6 +332,25 @@ test and the assistant smoke test above against a real model. Both are
 called out explicitly in the staging checklist because they're the one
 thing the mock cannot stand in for: the mocked hot-reload test proves the
 *registry/routing* logic is correct, but only a real
+
+**Ollama Keep-Alive / Timing Metrics tuning pass:** the assistant/analyze
+timing and `keep_alive` request-payload wiring are now covered by
+automated tests too (`tests/test_config.py` keep_alive validation,
+`tests/test_ollama_client.py` keep_alive-in-payload and timing-dict
+coverage, `tests/test_ollama_keep_alive_wiring.py` for the Settings ->
+OllamaClient wiring, plus a success/error logging-content test each in
+`tests/test_analyze.py`/`tests/test_assistant.py` - 207 tests total, still
+entirely against a mocked Ollama). This pass *was* additionally validated
+against the real, already-deployed staging DocPipe + a real
+`qwen2.5:1.5b-instruct` Ollama instance from the HubDix side (see
+`hubdix-light`'s `docs/modules/hotel-health-assistant.md` "Real QA") -
+that is what surfaced the ~4-minute default eviction and the near-limit
+`light`-profile durations this pass's config changes respond to. What
+real staging still needs to confirm after this specific deploy is exactly
+the "Ollama Keep-Alive" acceptance test above (a genuine `ollama ps`
+check over a real 15-minute window) - the automated suite only proves the
+*value is sent correctly*, not that the *actual* deployed Ollama process
+honors it the way its documentation says it should.
 `docker compose up -d` with an actual mounted `runtime-prompts` volume
 proves the *deployment* (mount, permissions, `config.yaml` path) is
 correct too.

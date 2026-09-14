@@ -270,17 +270,20 @@ stirling:
 
 ollama:                    # optional - only needed if any client has services.ai: true
   base_url: "http://ollama:11434"    # provider-wide connection only, no model here
+  keep_alive: "15m"         # optional - how long Ollama keeps a model resident after last use;
+                             # defaults to "5m" if omitted. Sent identically on every /api/generate
+                             # call (analyze AND assistant) - see "Ollama Keep-Alive" below.
 
 models:                    # named resource/quality classes - see "Model profiles" below
   light:
     provider: ollama
     model: "your-small-model"
-    timeout_seconds: 60
+    timeout_seconds: 90
     temperature: 0
   standard:
     provider: ollama
     model: "your-medium-model"
-    timeout_seconds: 120
+    timeout_seconds: 150
     temperature: 0
   heavy:
     provider: ollama
@@ -350,6 +353,37 @@ never a 500 on the first `/analyze` call that happens to hit the broken
 path. A config with no AI use at all (no `models:`, no client with `ai`
 or `model_overrides`) skips this validation entirely and behaves exactly
 like a pre-AI DocPipe deployment.
+
+`ollama.keep_alive` (see "Ollama Keep-Alive" below) is validated
+unconditionally, regardless of whether AI is otherwise configured: it must
+be a positive Go-style duration (`"30s"`/`"5m"`/`"15m"`/`"1h"`) or a plain
+positive integer number of seconds — `0`, a negative value, or anything
+else fails startup with `ConfigError` rather than being silently passed
+through to Ollama.
+
+### Ollama Keep-Alive
+
+`ollama.keep_alive` controls how long Ollama keeps a model resident in
+memory after the last request that used it — sent as Ollama's own
+`keep_alive` field on every `/api/generate` call this process makes
+(`system/services/ollama.py`), identically for `/documents/analyze` and
+`/assistant/query` since both share the single `OllamaClient` instance
+created at startup (`system/main.py`). It is infrastructure config, never
+a per-request or per-client setting — `AnalyzeRequest`/
+`AssistantQueryRequest` both reject unknown fields, so a client cannot
+send its own `keep_alive` even if it tried.
+
+Omit the key entirely to fall back to a conservative code default (`"5m"`,
+`system/config.py` `DEFAULT_OLLAMA_KEEP_ALIVE`) rather than silently
+inheriting whatever the example config happens to show. `"15m"` is the
+recommended production value for a single small (~1-2 GB resident)
+instruct model on an 8 GB box — long enough to survive normal
+question-to-question gaps without a cold reload, short enough to still
+free the RAM during genuinely idle periods. This pass does not implement
+any active model-preload/warm-keeper cron — `keep_alive` only changes
+*when Ollama's own existing eviction runs*, it does not prevent eviction
+after real inactivity (see `docs/staging-deployment.md` "Ollama
+Keep-Alive" for the acceptance test and RAM guidance).
 
 ## API
 

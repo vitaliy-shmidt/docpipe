@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     app.state.settings = settings
     app.state.stirling_client = StirlingClient(settings.stirling)
-    app.state.ollama_client = OllamaClient(settings.ollama.base_url)
+    app.state.ollama_client = OllamaClient(settings.ollama.base_url, keep_alive=settings.ollama.keep_alive)
     app.state.prompt_registry = PromptRegistry(
         settings.prompts.base_dir, settings.prompts.runtime_dir, settings.prompts.max_content_length
     )

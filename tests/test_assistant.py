@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from tests.conftest import ASSISTANT_KEY, LIGHT_MODEL, STANDARD_MODEL, VALID_KEY, auth_headers
 
 QUERY_URL = "/api/v1/assistant/query"
@@ -166,3 +168,45 @@ def test_capabilities_hides_assistant_modes_for_non_assistant_client(client):
     assert body["services"]["assistant"] is False
     assert "assistant" not in body["features"]
     assert body["assistant_modes"] is None
+
+
+# --- Timing Metrics pass (task §11/§14/§33) ---------------------------------
+
+
+def test_assistant_success_log_line_has_timing_and_no_content(client, caplog):
+    fake = client.fake_ollama["client"]
+    fake.result = {"answer": "..."}
+    with caplog.at_level(logging.INFO, logger="docpipe.assistant"):
+        response = _query(client, question="UNIQUE-QUESTION-TOKEN", context={"secret_field": "SECRET-VALUE"})
+    assert response.status_code == 200
+
+    [record] = [r for r in caplog.records if r.name == "docpipe.assistant"]
+    message = record.getMessage()
+
+    assert "status=success" in message
+    assert "assistant_mode=" in message
+    assert "model=" in message
+    assert "model_profile=" in message
+    assert "prompt_version=" in message
+    assert "question_chars=" in message
+    assert "context_chars=" in message
+    assert "ollama_duration_ms=" in message
+    assert "total_duration_ms=" in message
+    # Task §14/§33: never the question, the context content, the answer, or
+    # a secret - metadata (counts/mode/model/duration) only.
+    assert "UNIQUE-QUESTION-TOKEN" not in message
+    assert "SECRET-VALUE" not in message
+    assert "..." not in message  # the fake answer text itself
+
+
+def test_assistant_error_log_line_has_timing_and_status_code(client, caplog):
+    fake = client.fake_ollama["client"]
+    fake.mode = "timeout"
+    with caplog.at_level(logging.INFO, logger="docpipe.assistant"):
+        response = _query(client, question="Wie steht mein Hotel technisch da?")
+    assert response.status_code == 504
+
+    [record] = [r for r in caplog.records if r.name == "docpipe.assistant"]
+    message = record.getMessage()
+    assert "status=ai_timeout" in message
+    assert "total_duration_ms=" in message
