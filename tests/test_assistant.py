@@ -5,6 +5,7 @@ import logging
 from tests.conftest import ASSISTANT_KEY, LIGHT_MODEL, STANDARD_MODEL, VALID_KEY, auth_headers
 
 QUERY_URL = "/api/v1/assistant/query"
+WARMUP_URL = "/api/v1/assistant/warmup"
 
 
 def _query(client, question="Welche Wartungen sind überfällig?", context=None, headers=None):
@@ -210,3 +211,96 @@ def test_assistant_error_log_line_has_timing_and_status_code(client, caplog):
     message = record.getMessage()
     assert "status=ai_timeout" in message
     assert "total_duration_ms=" in message
+
+
+# --- Assistant Warm-up ------------------------------------------------------
+
+
+def _warmup(client, json_body=None, headers=None):
+    return client.post(
+        WARMUP_URL,
+        json=json_body if json_body is not None else {},
+        headers=auth_headers(ASSISTANT_KEY) if headers is None else headers,
+    )
+
+
+def test_warmup_missing_auth(client):
+    response = _warmup(client, headers={})
+    assert response.status_code == 401
+    assert response.json()["code"] == "unauthorized"
+
+
+def test_warmup_disabled_for_client_without_permission(client):
+    response = _warmup(client, headers=auth_headers(VALID_KEY))
+    assert response.status_code == 403
+    assert response.json()["code"] == "assistant_disabled"
+
+
+def test_warmup_success_resolves_hotel_health_summary_model(client):
+    response = _warmup(client)
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["ready"] is True
+    assert body["model_profile"] == "standard"
+    assert body["model"] == STANDARD_MODEL
+    assert isinstance(body["duration_ms"], (int, float))
+
+    fake = client.fake_ollama["client"]
+    assert fake.warmup_calls == 1
+    assert fake.last_warmup_model == STANDARD_MODEL
+
+
+def test_warmup_is_idempotent_across_repeated_calls(client):
+    first = _warmup(client)
+    second = _warmup(client)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert client.fake_ollama["client"].warmup_calls == 2
+
+
+def test_warmup_rejects_unknown_fields(client):
+    for field, value in (
+        ("model", LIGHT_MODEL),
+        ("prompt", "hello"),
+        ("keep_alive", "1h"),
+        ("hotel_id", 42),
+        ("context", {}),
+        ("question", "Wie steht mein Hotel da?"),
+    ):
+        response = _warmup(client, json_body={field: value})
+        assert response.status_code == 400, f"field {field!r} should be rejected"
+        assert response.json()["code"] == "invalid_request"
+
+
+def test_warmup_ollama_unavailable(client):
+    client.fake_ollama["client"].warmup_mode = "unavailable"
+    response = _warmup(client)
+    assert response.status_code == 502
+    assert response.json()["code"] == "ai_unavailable"
+
+
+def test_warmup_ollama_timeout(client):
+    client.fake_ollama["client"].warmup_mode = "timeout"
+    response = _warmup(client)
+    assert response.status_code == 504
+    assert response.json()["code"] == "ai_timeout"
+
+
+def test_warmup_success_log_line_has_timing_and_no_content(client, caplog):
+    with caplog.at_level(logging.INFO, logger="docpipe.assistant"):
+        response = _warmup(client)
+    assert response.status_code == 200
+
+    records = [r for r in caplog.records if r.name == "docpipe.assistant"]
+    message = records[-1].getMessage()
+
+    assert "status=success" in message
+    assert "model_profile=standard" in message
+    assert f"model={STANDARD_MODEL}" in message
+    assert "ollama_duration_ms=" in message
+    assert "total_duration_ms=" in message
+    # No question/context/hotel fields exist for warm-up in the first place -
+    # this just confirms the log line never grew any (task §17/§44).
+    assert "question" not in message
+    assert "context" not in message
+    assert "hotel" not in message

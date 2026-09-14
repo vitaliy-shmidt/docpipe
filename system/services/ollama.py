@@ -154,6 +154,40 @@ class OllamaClient:
         metrics = {"duration_ms": duration_ms, **self._extract_ollama_metrics(body)}
         return str(body.get("response", "")), metrics
 
+    def warm_up(self, *, model: str, timeout_seconds: float, timing: dict | None = None) -> None:
+        """Load `model` into Ollama's memory without producing a real answer.
+
+        Same request/error-mapping shape as `_call`, but with no `format`
+        schema (a warm-up has no structured answer to validate) and no
+        repair loop - the caller only cares that Ollama accepted the model
+        and, if configured, refreshed `keep_alive`.
+        """
+        url = self._base_url.rstrip("/") + GENERATE_PATH
+        payload = {"model": model, "prompt": "", "stream": False}
+        if self._keep_alive:
+            payload["keep_alive"] = self._keep_alive
+        started_at = time.monotonic()
+        try:
+            response = self._client.post(url, json=payload, timeout=timeout_seconds)
+        except httpx.TimeoutException as exc:
+            raise DocPipeError("ai_timeout", "AI model warm-up timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise DocPipeError("ai_unavailable", "AI analysis service is temporarily unavailable.") from exc
+        duration_ms = round((time.monotonic() - started_at) * 1000, 1)
+
+        if response.status_code != 200:
+            raise DocPipeError("ai_processing_failed", "AI model warm-up failed.")
+
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise DocPipeError("ai_processing_failed", "AI model warm-up failed.") from exc
+
+        if timing is not None:
+            timing["ollama_duration_ms"] = duration_ms
+            for key, value in self._extract_ollama_metrics(body).items():
+                timing[f"ollama_{key}"] = value
+
     @staticmethod
     def _extract_ollama_metrics(body: dict) -> dict:
         metrics: dict = {}

@@ -118,6 +118,14 @@ class FakeOllamaClient:
         # deterministic (no real wall-clock duration).
         self.fake_primary_duration_ms = 12.3
         self.fake_repair_duration_ms = 4.5
+        # Warm-up: independent mode/counters from generate_structured's -
+        # a test can make a normal query succeed while warm-up fails, or
+        # vice versa, without the two paths interfering.
+        self.warmup_mode = "success"
+        self.warmup_calls = 0
+        self.last_warmup_model = None
+        self.last_warmup_timeout_seconds = None
+        self.fake_warmup_duration_ms = 850.0
 
     def close(self) -> None:
         pass
@@ -158,6 +166,22 @@ class FakeOllamaClient:
         if self.mode == "processing_failed":
             raise DocPipeError("ai_processing_failed", "AI analysis failed.")
         raise AssertionError(f"unexpected fake ollama mode: {self.mode}")
+
+    def warm_up(self, *, model: str, timeout_seconds: float, timing: dict | None = None) -> None:
+        self.warmup_calls += 1
+        self.last_warmup_model = model
+        self.last_warmup_timeout_seconds = timeout_seconds
+        if timing is not None:
+            timing["ollama_duration_ms"] = self.fake_warmup_duration_ms
+        if self.warmup_mode == "success":
+            return
+        if self.warmup_mode == "unavailable":
+            raise DocPipeError("ai_unavailable", "AI analysis service is temporarily unavailable.")
+        if self.warmup_mode == "timeout":
+            raise DocPipeError("ai_timeout", "AI model warm-up timed out.")
+        if self.warmup_mode == "processing_failed":
+            raise DocPipeError("ai_processing_failed", "AI model warm-up failed.")
+        raise AssertionError(f"unexpected fake ollama warmup mode: {self.warmup_mode}")
 
 
 LIGHT_MODEL = "light-test-model"

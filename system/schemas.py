@@ -216,3 +216,23 @@ class AssistantQueryData(BaseModel):
 class AssistantQueryResponse(BaseModel):
     ok: bool
     data: AssistantQueryData
+
+
+class AssistantWarmupRequest(BaseModel):
+    """Deliberately empty: extra="forbid" rejects model/prompt/keep_alive/
+    hotel_id/context/question - warm-up takes no client-supplied input,
+    everything is resolved server-side (see system/routes/assistant.py)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AssistantWarmupData(BaseModel):
+    ready: bool
+    model_profile: str
+    model: str
+    duration_ms: float
+
+
+class AssistantWarmupResponse(BaseModel):
+    ok: bool
+    data: AssistantWarmupData

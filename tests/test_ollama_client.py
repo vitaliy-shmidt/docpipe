@@ -300,3 +300,91 @@ def test_timing_missing_ollama_response_metrics_does_not_fail_request():
     assert result == {"foo": "bar"}
     assert "ollama_primary_load_ms" not in timing
     assert timing["ollama_primary_duration_ms"] >= 0
+
+
+# --- warm_up() ---------------------------------------------------------------
+
+
+def test_warm_up_sends_empty_prompt_and_no_format():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"done": True})
+
+    client = _make_client(handler)
+    client.warm_up(model="test-model", timeout_seconds=5)
+
+    assert len(calls) == 1
+    body = json.loads(calls[0].content)
+    assert body == {"model": "test-model", "prompt": "", "stream": False}
+    assert "format" not in body
+    assert "options" not in body
+
+
+def test_warm_up_includes_keep_alive_when_configured():
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["keep_alive"] == "15m"
+        return httpx.Response(200, json={"done": True})
+
+    client = OllamaClient("http://ollama.test", keep_alive="15m")
+    client._client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+    client.warm_up(model="test-model", timeout_seconds=5)
+
+
+def test_warm_up_omits_keep_alive_when_not_configured():
+    def handler(request):
+        body = json.loads(request.content)
+        assert "keep_alive" not in body
+        return httpx.Response(200, json={"done": True})
+
+    client = _make_client(handler)
+    client.warm_up(model="test-model", timeout_seconds=5)
+
+
+def test_warm_up_connection_error_raises_ai_unavailable():
+    def handler(request):
+        raise httpx.ConnectError("boom", request=request)
+
+    client = _make_client(handler)
+    with pytest.raises(DocPipeError) as exc_info:
+        client.warm_up(model="test-model", timeout_seconds=5)
+    assert exc_info.value.code == "ai_unavailable"
+
+
+def test_warm_up_timeout_raises_ai_timeout():
+    def handler(request):
+        raise httpx.TimeoutException("boom", request=request)
+
+    client = _make_client(handler)
+    with pytest.raises(DocPipeError) as exc_info:
+        client.warm_up(model="test-model", timeout_seconds=5)
+    assert exc_info.value.code == "ai_timeout"
+
+
+def test_warm_up_non_200_raises_ai_processing_failed():
+    client = _make_client(lambda request: httpx.Response(500, text="boom"))
+    with pytest.raises(DocPipeError) as exc_info:
+        client.warm_up(model="test-model", timeout_seconds=5)
+    assert exc_info.value.code == "ai_processing_failed"
+
+
+def test_warm_up_populates_timing_dict():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"done": True, "total_duration": 5_000_000_000, "load_duration": 2_000_000_000},
+        )
+
+    client = _make_client(handler)
+    timing: dict = {}
+    client.warm_up(model="test-model", timeout_seconds=5, timing=timing)
+
+    assert "ollama_duration_ms" in timing
+    assert timing["ollama_load_ms"] == 2000.0
+
+
+def test_warm_up_timing_untouched_when_not_requested():
+    client = _make_client(lambda request: httpx.Response(200, json={"done": True}))
+    client.warm_up(model="test-model", timeout_seconds=5)  # no timing kwarg, must not raise

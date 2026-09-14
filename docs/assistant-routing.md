@@ -154,6 +154,60 @@ implied by it. `capabilities` reports `assistant_modes` (the fixed mode
 name list) only for an assistant-enabled client, same discovery principle
 as `ai_modes`.
 
+## Warm-up - `POST /api/v1/assistant/warmup`
+
+A self-hosted Ollama model must be loaded into memory before it can answer
+quickly; the first ("cold") request after `keep_alive` expires pays that
+load cost, and the caller who happens to send it experiences the full
+delay. Warm-up exists to move that cost out of a real question's path: a
+caller (HubDix, on hotel selection or question-field focus) can ask
+DocPipe to load the model *before* the user finishes typing.
+
+```text
+POST /api/v1/assistant/warmup
+  -> system/assistant/modes.py::get_assistant_mode("hotel_health_summary")
+  -> system/ai/resolver.py::resolve_model_profile()   REUSED, unchanged - same resolver /query uses
+  -> OllamaClient.warm_up()                            new, minimal - no schema, no repair loop
+```
+
+- **Model resolution**: always resolves via the `hotel_health_summary`
+  mode (the cockpit's reference mode) through the exact same
+  `resolve_model_profile()` extraction/query already use - never a
+  hardcoded model string. If a client has a `model_overrides` entry for
+  that mode, warm-up respects it, so it always warms the model that
+  mode's real query would actually run for that client.
+- **Request**: no body, or `{}` - `AssistantWarmupRequest` is a
+  `extra="forbid"` schema with zero fields, so `model`, `prompt`,
+  `keep_alive`, `hotel_id`, `context`, and `question` are all rejected
+  (`invalid_request`, 400) rather than silently accepted/ignored.
+  Everything the call needs is resolved server-side.
+- **Ollama call**: `OllamaClient.warm_up()` POSTs
+  `{"model": ..., "prompt": "", "stream": False}` (+ `keep_alive` when
+  configured) to the same `/api/generate` endpoint `generate_structured()`
+  uses - no `format` schema, no JSON parsing/repair, since there is no
+  structured answer to validate. This is the officially documented Ollama
+  idiom for loading a model without generating real output.
+- **Keep-alive**: reuses `OllamaSettings.keep_alive` unchanged - the same
+  single value every other call on the shared `OllamaClient` instance
+  uses. There is no separate warm-up keep-alive setting.
+- **No context, no agent**: warm-up never reads or requires hotel data,
+  never builds a prompt, never calls the router, and produces no answer -
+  it is infrastructure-only, entirely separate from the question/context
+  trust boundary described above.
+- **Idempotency**: calling it again while the model is already loaded is
+  still a success - it simply refreshes `keep_alive`, there is no "already
+  warm" error.
+- **Errors**: reuses the exact same codes as `/assistant/query` -
+  `assistant_disabled` (permission), `ai_unavailable`, `ai_timeout`,
+  `ai_processing_failed` - no new error vocabulary. Timeout is bounded
+  between the resolved model profile's own `timeout_seconds` and a hard
+  180s ceiling (a cold load can run longer than a normal generate call,
+  but must still not be unbounded).
+- **Logging**: identical metadata-only pattern (`request_id`, `client_id`,
+  `model_profile`, `model`, `status`, `ollama_duration_ms`,
+  `total_duration_ms`) via the same `docpipe.assistant` logger - never a
+  question, context, or answer, because none exist for this call.
+
 ## Not implemented (by design - this is a foundation, not the assistant)
 
 - The actual HubDix-facing "Frag HubDix" feature/button - this pass ships
