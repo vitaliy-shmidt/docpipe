@@ -35,9 +35,14 @@ Minimum to decide/set before first deploy:
   production) - see "Ollama Keep-Alive" below for why this matters and how
   to verify it after deploy.
 - **Model profiles**: `models.light` / `models.standard` (at minimum -
-  these are the two currently-active modes' defaults; `models.heavy` is
-  optional until a mode that defaults to it exists) - each pointing at a
-  model actually pulled into that Ollama instance.
+  these are the defaults of all currently-active extraction modes:
+  `maintenance_extraction` -> `light`, `inspection_extraction` and
+  `contract_extraction` -> `standard`; `models.heavy` is optional until a
+  mode that defaults to it exists) - each pointing at a model actually
+  pulled into that Ollama instance. `contract_extraction` sends longer
+  inputs than a service report; check its real duration against the
+  `standard` profile's `timeout_seconds` with a few real contracts (see
+  "Staging checklist" below) before enabling it for users.
 - **Mode routing / overrides**: confirm which client gets which profile
   per mode (`clients.<id>.model_overrides`, or the mode defaults if none
   is set) - see README.md "Model profiles" for the exact resolution order.
@@ -245,6 +250,7 @@ treating the slower response as a problem on its own.
 [ ] light Profile funktioniert
 [ ] standard Profile funktioniert
 [ ] Schema Validation funktioniert
+[ ] contract_extraction mit 2-3 echten Verträgen: Laufzeit unter standard.timeout_seconds, keine erfundenen Daten/Fristen (null bei Unklarheit)
 [ ] Logs enthalten keine Dokumentinhalte
 [ ] Logs enthalten Timing-Metadaten (ollama_duration_ms/total_duration_ms) ohne Inhalte
 [ ] ollama.keep_alive gesetzt (empfohlen "15m") und per `ollama ps` verifiziert - nur falls ai/assistant genutzt wird

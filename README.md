@@ -101,6 +101,9 @@ docpipe/
 │  │  ├─ inspection_extraction/
 │  │  │  ├─ v1.txt
 │  │  │  └─ schema.json
+│  │  ├─ contract_extraction/
+│  │  │  ├─ v1.txt
+│  │  │  └─ schema.json
 │  │  └─ assistant/                # one subfolder per assistant mode, same v1.txt/active.json shape
 │  │     ├─ hotel_health_summary/v1.txt
 │  │     ├─ maintenance_question/v1.txt
@@ -410,7 +413,7 @@ Reflects what the calling client is actually allowed to use.
   "ok": true,
   "services": { "documents": true, "ai": true, "prompt_lab": true, "assistant": true },
   "features": ["extract_text", "ocr_fallback", "analyze", "prompt_lab", "assistant"],
-  "ai_modes": ["maintenance_extraction", "inspection_extraction"],
+  "ai_modes": ["maintenance_extraction", "inspection_extraction", "contract_extraction"],
   "assistant_modes": ["hotel_health_summary", "maintenance_question", "inspection_question", "contract_question", "document_question", "general_hotel_question"]
 }
 ```
@@ -577,6 +580,7 @@ versioned prompt template and response JSON Schema under
 |--------------------------|-------------------------|-------------------|
 | `maintenance_extraction` | `v1`                    | `vendor_name`, `service_type`, `performed_at`, `next_due_date`, `technician`, `result`, `cost`, `currency`, `notes` |
 | `inspection_extraction`  | `v1`                    | `inspection_type`, `inspection_date`, `next_due_date`, `vendor_name`, `inspector`, `result`, `defects_found`, `certificate_number`, `notes` |
+| `contract_extraction`    | `v1`                    | `vendor_name`, `contact_person`, `contract_type`, `contract_number`, `service_description`, `start_date`, `end_date`, `is_open_ended`, `notice_period`, `notice_period_value`, `notice_period_unit`, `renewal_terms`, `auto_renewal`, `renewal_period_value`, `renewal_period_unit`, `amount`, `currency`, `payment_interval`, `notes` |
 
 "Default" because the prompt *text* is no longer fixed at deploy time
 (V2.2): each mode's actually-active version is runtime-resolved on every
@@ -586,10 +590,47 @@ request and can be changed (draft-tested, saved, activated) through the
 `max_input_length` shown per mode are still fixed here in code, not
 Lab-editable.
 
-More modes (`contract_extraction`, `project_offer_extraction`,
-`document_summary`, ...) are anticipated by this same registry structure
-but are **not implemented** — registering one is adding a prompt +
-schema + registry entry, nothing else in the request pipeline changes.
+More modes (`project_offer_extraction`, `document_summary`, ...) are
+anticipated by this same registry structure but are **not implemented** —
+registering one is adding a prompt + schema + registry entry, nothing
+else in the request pipeline changes (`contract_extraction` was added
+exactly this way, see below).
+
+#### `contract_extraction`
+
+Purpose: pull the structured facts of an **existing** service/supply
+contract out of its already-extracted text, so a consumer can pre-fill a
+*draft* that a human then reviews (HubDix: Contracts Import Drafts). It
+is not the assistant mode `contract_question`
+([docs/assistant-routing.md](docs/assistant-routing.md)) - that one
+answers a question about contract data a consumer already holds; this
+one extracts facts from a document.
+
+- **Schema** ([system/prompts/contract_extraction/schema.json](system/prompts/contract_extraction/schema.json)):
+  every field is required *and* nullable, `additionalProperties: false`.
+  Dates are ISO `YYYY-MM-DD` (same pattern as the other modes),
+  `currency` is a 3-letter ISO code, `notice_period_unit`/
+  `renewal_period_unit` are one of `days`/`weeks`/`months`/`years`,
+  `payment_interval` is one of `monthly`/`quarterly`/`semiannual`/
+  `annual`/`one_time`/`other`. The free-text fields `notice_period`/
+  `renewal_terms`/`notes` carry a clause close to the document's own
+  wording; the structured `…_value`/`…_unit`/`auto_renewal`/
+  `is_open_ended` fields are only filled when the document states them
+  plainly.
+- **Model profile**: `standard` (see "Mode -> profile routing").
+- **Null semantics**: `null` means "not stated clearly in the document".
+  The prompt forbids guessing, computing an end date from a start date
+  plus a duration, filling a field from `context`, picking one side of a
+  contradiction (contradictions go to `notes`), and VAT conversion.
+- **No DB IDs**: the schema has no ID-shaped field and rejects unknown
+  keys - a consumer gets text suggestions (`vendor_name`,
+  `contract_type`, ...) and does its own, user-confirmed matching.
+- **No legal interpretation guarantee**: the output is an extraction
+  aid, not legal advice. It does not report whether a contract is
+  active, cancelled or renewed, and complex clauses are deliberately
+  returned as text rather than interpreted. A consumer must treat every
+  value as a suggestion for human review, never as a fact to persist
+  automatically.
 
 ### Request
 
@@ -728,12 +769,17 @@ in `system/ai/modes.py`:
 |--------------------------|------------------|-----|
 | `maintenance_extraction` | `light`          | Mostly straightforward structured extraction from a short-to-medium service report. |
 | `inspection_extraction`  | `standard`       | Wording and structure vary more; often needs more semantic judgement (e.g. telling a real defect finding apart from boilerplate). |
+| `contract_extraction`    | `standard`       | Several parties, conditional term/notice/renewal clauses - more semantic judgement than a service report. |
 
-`contract_extraction`, `project_offer_extraction`, and similar
-more-complex future modes are expected to default to `heavy` - which is
-exactly why `heavy` is defined as a profile class already, even though no
-active mode uses it yet (see "Not implemented" below: `contract_extraction`
-itself is not built in this pass).
+`contract_extraction` was originally expected to need `heavy`. It
+defaults to `standard` instead because `standard` is the profile every
+deployment already has to define (staging defines `heavy` only
+optionally), and the prompt keeps the task narrow (text-close clauses
+instead of legal interpretation). A deployment that measures better
+results with a larger model bumps it per client via `model_overrides`
+(e.g. `contract_extraction: heavy`) - no code change. `heavy` stays a
+defined profile class for `project_offer_extraction` and similar future
+modes.
 
 ### Client overrides
 
@@ -903,7 +949,7 @@ references, fail-fast on inconsistent config, OCR config
 defaults/overrides and backward compatibility with a pre-OCR config),
 model resolution (`tests/test_resolver.py` - mode defaults, client
 overrides, no silent fallback on an invalid profile), strict request
-rejection of client-supplied model/temperature/prompt fields, both
+rejection of client-supplied model/temperature/prompt fields, all
 extraction modes' schemas, a mocked success path for each, that no
 secrets/prompts/document text leak into error responses, and that no
 temp files are left behind after a request. No test requires a running
@@ -927,6 +973,17 @@ mutated, question/context size limits, the three Ollama failure-mode
 mappings, and that neither the question nor `context` leak into a
 response or error) round out the suite.
 
+`contract_extraction` has its own file (`tests/test_contract_extraction.py`):
+registry entry/profile, prompt rendering and its hallucination-guard
+rules, a strict, fully nullable schema without any ID-shaped field,
+synthetic sample results (simple contract, complex notice/renewal clause
+without a computed end date, missing data, contradictory text) validated
+against the schema, the analyze success/null/error/auth/`ai`-disabled
+paths, rejection of client-supplied model/prompt fields, metadata-only
+logging, Prompt Lab listing/load/draft-analyze/save+activate, and the
+real `OllamaClient` validation/repair/repair-failure/timeout/unavailable
+behavior against the real contract schema.
+
 If you do have real Stirling/Ollama instances available locally, a
 manual end-to-end check with an actual PDF and a few real documents per
 AI mode is worthwhile before deploying — see
@@ -938,9 +995,9 @@ Semantic search, RAG, model training/fine-tuning, automatic document
 classification, a database, quotas/plans/usage/billing, user management,
 a web UI, persistent job storage, input chunking for oversized AI text,
 a second model provider (the `provider` field exists for one, but only
-`"ollama"` is implemented), `contract_extraction`/other `heavy`-profile
-modes (the `heavy` profile class exists so they can be added later
-without an architecture change, but none is built yet), request
+`"ollama"` is implemented), `heavy`-profile modes (the `heavy` profile
+class exists so they can be added later without an architecture change,
+but none is built yet), request
 concurrency control/queueing beyond what Ollama itself does, and any
 business logic belonging to a specific consumer project (hotels,
 maintenance, contracts, categories, etc.). HubDix or Chronodix may use

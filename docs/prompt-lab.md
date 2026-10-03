@@ -1,6 +1,8 @@
 # Prompt Lab
 
-Runtime-resolved, versioned prompts for each extraction mode, plus a
+Runtime-resolved, versioned prompts for each extraction mode
+(`maintenance_extraction`, `inspection_extraction`, `contract_extraction`
+- every entry of `system/ai/modes.py`, none needs Lab-specific code), plus a
 `prompt_lab`-gated API to inspect, draft-test, save, and activate them -
 so a prompt change is a config-like operation (save a version, activate
 it) instead of a code change requiring an image rebuild/redeploy. See
