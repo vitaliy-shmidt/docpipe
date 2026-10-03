@@ -299,8 +299,12 @@ def test_warmup_success_log_line_has_timing_and_no_content(client, caplog):
     assert f"model={STANDARD_MODEL}" in message
     assert "ollama_duration_ms=" in message
     assert "total_duration_ms=" in message
-    # No question/context/hotel fields exist for warm-up in the first place -
-    # this just confirms the log line never grew any (task §17/§44).
+    # No question/context/hotel data fields exist for warm-up in the first
+    # place - this just confirms the log line never grew any (task §17/§44).
+    # The (fixed, non-sensitive) mode name is logged since the shared
+    # warm-up helper (system/ai/warmup.py) also serves extraction modes.
+    assert "mode=hotel_health_summary" in message
     assert "question" not in message
     assert "context" not in message
-    assert "hotel" not in message
+    assert "hotel_id" not in message
+    assert "hotel_name" not in message

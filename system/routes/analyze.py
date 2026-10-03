@@ -33,10 +33,18 @@ from fastapi import APIRouter, Depends, Request
 from system.ai.modes import get_mode
 from system.ai.prompting import build_prompt
 from system.ai.resolver import resolve_model_profile
+from system.ai.warmup import run_warmup
 from system.auth import get_authenticated_client, require_ai_service
 from system.config import ClientConfig
 from system.errors import DocPipeError
-from system.schemas import AnalyzeData, AnalyzeRequest, AnalyzeResponse
+from system.schemas import (
+    AnalyzeData,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    AssistantWarmupData,
+    ExtractionWarmupRequest,
+    ExtractionWarmupResponse,
+)
 
 router = APIRouter()
 logger = logging.getLogger("docpipe.ai")
@@ -139,3 +147,27 @@ def analyze(
             result=result,
         ),
     )
+
+
+@router.post("/api/v1/documents/warmup", response_model=ExtractionWarmupResponse)
+def analyze_warmup(
+    request: Request,
+    body: ExtractionWarmupRequest,
+    client: ClientConfig = Depends(get_authenticated_client),
+) -> ExtractionWarmupResponse:
+    """Pre-load the model an extraction mode resolves to for this client.
+
+    Same permission gate (`ai`), same mode registry and same resolver
+    (incl. the client's model_overrides) as /documents/analyze - so the
+    warmed model is exactly the one the next analyze call of that mode
+    runs. No text, no prompt, no answer (see system/ai/warmup.py). A
+    consumer calls this non-blocking when a user opens a screen where an
+    analysis is likely (e.g. HubDix' contract draft workspace), so the
+    first real analyze does not pay Ollama's cold-start.
+    """
+    require_ai_service(client)
+    mode = get_mode(body.mode)
+    if mode is None:
+        raise DocPipeError("unknown_mode", f"Unknown analysis mode: {body.mode!r}.")
+    data = run_warmup(request, client, mode, logger)
+    return ExtractionWarmupResponse(ok=True, data=AssistantWarmupData(**data))

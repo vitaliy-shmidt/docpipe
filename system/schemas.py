@@ -236,3 +236,20 @@ class AssistantWarmupData(BaseModel):
 class AssistantWarmupResponse(BaseModel):
     ok: bool
     data: AssistantWarmupData
+
+
+class ExtractionWarmupRequest(BaseModel):
+    """Warm-up for an extraction mode (/api/v1/documents/warmup).
+
+    Only the mode NAME - same "client selects a task, DocPipe selects the
+    model" boundary as AnalyzeRequest: extra="forbid" rejects model/
+    model_profile/prompt/keep_alive/text/context.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str
+
+
+# Identical response shape for both warm-up endpoints.
+ExtractionWarmupResponse = AssistantWarmupResponse

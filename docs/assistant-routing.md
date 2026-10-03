@@ -156,6 +156,12 @@ as `ai_modes`.
 
 ## Warm-up - `POST /api/v1/assistant/warmup`
 
+> Extraction modes have their own entry point, `POST /api/v1/documents/warmup`
+> with `{"mode": "contract_extraction"}` (gated by `ai`, see README "API").
+> Both endpoints share `system/ai/warmup.py` - one implementation, the same
+> resolver, the same bounded timeout (120-180 s) and metadata-only logging
+> (`action=warmup mode=... model_profile=... status=...`).
+
 A self-hosted Ollama model must be loaded into memory before it can answer
 quickly; the first ("cold") request after `keep_alive` expires pays that
 load cost, and the caller who happens to send it experiences the full

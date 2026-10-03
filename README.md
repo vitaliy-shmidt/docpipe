@@ -456,6 +456,22 @@ the full request/response contract, modes, and error codes. Never
 accepts a client-supplied prompt - see "Prompt Lab (V2.2)" below for the
 one endpoint that does.
 
+### `POST /api/v1/documents/warmup` — authenticated
+
+Only for clients with `services.ai: true`. Body `{"mode": "<extraction
+mode>"}` (e.g. `contract_extraction`), nothing else (`extra="forbid"`
+rejects `model`/`model_profile`/`keep_alive`/`text`/`prompt`). Loads the
+model that mode resolves to for the calling client - same mode registry,
+same resolver incl. `model_overrides` as `/documents/analyze` - into
+Ollama, without generating anything. Response shape is identical to
+`/api/v1/assistant/warmup` (`ready`, `model_profile`, `model`,
+`duration_ms`); errors as for analyze (`unknown_mode`, `ai_disabled`,
+`ai_unavailable`, `ai_timeout`). Both warm-up endpoints share one
+implementation (`system/ai/warmup.py`). Intended for a non-blocking call
+when a user opens a screen where an analysis is likely (HubDix: contract
+draft workspace), so the first real analyze does not pay Ollama's cold
+start; it complements `ollama.keep_alive`, it does not replace it.
+
 ### Prompt Lab endpoints — authenticated, V2.2
 
 Only for clients with `services.prompt_lab: true`

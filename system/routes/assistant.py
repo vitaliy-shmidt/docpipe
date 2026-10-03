@@ -25,6 +25,7 @@ import time
 from fastapi import APIRouter, Body, Depends, Request
 
 from system.ai.resolver import resolve_model_profile
+from system.ai.warmup import run_warmup
 from system.assistant.modes import ANSWER_SCHEMA, get_assistant_mode
 from system.assistant.prompting import build_assistant_prompt
 from system.assistant.router import route
@@ -53,11 +54,6 @@ MAX_CONTEXT_SERIALIZED_LENGTH = 100_000
 # every assistant mode, just this one).
 WARMUP_MODE_NAME = "hotel_health_summary"
 
-# A cold load can take much longer than a normal generate call, but must
-# still be bounded - never below the mode's own configured timeout, never
-# above a hard ceiling (task §15).
-WARMUP_MIN_TIMEOUT_SECONDS = 120.0
-WARMUP_MAX_TIMEOUT_SECONDS = 180.0
 
 
 @router.post("/api/v1/assistant/query", response_model=AssistantQueryResponse)
@@ -189,57 +185,7 @@ def assistant_warmup(
     mode = get_assistant_mode(WARMUP_MODE_NAME)
     assert mode is not None  # WARMUP_MODE_NAME is a fixed, known-good ASSISTANT_MODES key
 
-    settings = request.app.state.settings
-    profile_name, profile = resolve_model_profile(mode, client, settings)
-    timeout_seconds = min(
-        max(profile.timeout_seconds, WARMUP_MIN_TIMEOUT_SECONDS), WARMUP_MAX_TIMEOUT_SECONDS
-    )
-
-    log_fields = {
-        "request_id": getattr(request.state, "request_id", None),
-        "client_id": client.client_id,
-        "model_profile": profile_name,
-        "model": profile.model,
-    }
-    timing: dict = {}
-    started_at = time.monotonic()
-    try:
-        request.app.state.ollama_client.warm_up(
-            model=profile.model, timeout_seconds=timeout_seconds, timing=timing
-        )
-    except DocPipeError as exc:
-        total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
-        logger.info(
-            "request_id=%(request_id)s client_id=%(client_id)s model_profile=%(model_profile)s "
-            "model=%(model)s status=%(status)s ollama_duration_ms=%(ollama_duration_ms)s "
-            "total_duration_ms=%(total_duration_ms)s",
-            {
-                **log_fields,
-                "status": exc.code,
-                "ollama_duration_ms": timing.get("ollama_duration_ms"),
-                "total_duration_ms": total_duration_ms,
-            },
-        )
-        raise
-
-    total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
-    logger.info(
-        "request_id=%(request_id)s client_id=%(client_id)s model_profile=%(model_profile)s "
-        "model=%(model)s status=success ollama_duration_ms=%(ollama_duration_ms)s "
-        "total_duration_ms=%(total_duration_ms)s",
-        {
-            **log_fields,
-            "ollama_duration_ms": timing.get("ollama_duration_ms"),
-            "total_duration_ms": total_duration_ms,
-        },
-    )
-
-    return AssistantWarmupResponse(
-        ok=True,
-        data=AssistantWarmupData(
-            ready=True,
-            model_profile=profile_name,
-            model=profile.model,
-            duration_ms=total_duration_ms,
-        ),
-    )
+    # Same shared helper as /api/v1/documents/warmup (system/ai/warmup.py) -
+    # one warm-up implementation, two task-specific entry points.
+    data = run_warmup(request, client, mode, logger)
+    return AssistantWarmupResponse(ok=True, data=AssistantWarmupData(**data))
