@@ -96,11 +96,11 @@ def test_lab_save_and_activate_work_without_ai_permission(client):
 # --- List / load ---------------------------------------------------------
 
 
-def test_lab_list_reports_both_modes_with_v1_active(client):
+def test_lab_list_reports_all_modes_with_v1_active(client):
     response = client.get(LIST_URL, headers=auth_headers(LAB_KEY))
     assert response.status_code == 200
     modes = {m["mode"]: m for m in response.json()["data"]["modes"]}
-    assert set(modes.keys()) == {"maintenance_extraction", "inspection_extraction"}
+    assert set(modes.keys()) == {"maintenance_extraction", "inspection_extraction", "contract_extraction"}
     assert modes["maintenance_extraction"]["active_version"] == "v1"
     assert modes["maintenance_extraction"]["versions"] == ["v1"]
 

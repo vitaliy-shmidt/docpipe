@@ -90,6 +90,24 @@ MODES: dict[str, Mode] = {
         model_profile="standard",
         description="Extract structured inspection facts from an inspection/certification document.",
     ),
+    # Contracts are semantically harder than a service report: several
+    # parties are named (provider vs. customer), terms/notice/renewal are
+    # often conditional clauses, and the prompt has to keep the model from
+    # "helpfully" computing dates or interpreting legal wording - same
+    # class as inspection_extraction. Not to be confused with the
+    # assistant mode contract_question (system/assistant/modes.py), which
+    # answers questions about already-known contract data instead of
+    # extracting facts from a document.
+    "contract_extraction": _load_mode(
+        "contract_extraction",
+        "v1",
+        _MAX_INPUT_LENGTH,
+        model_profile="standard",
+        description=(
+            "Extract structured contract facts (parties, term, notice, renewal, value) "
+            "from a contract document."
+        ),
+    ),
 }
 
 

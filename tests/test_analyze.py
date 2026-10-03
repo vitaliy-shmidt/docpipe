@@ -280,7 +280,7 @@ def test_capabilities_reports_ai_modes_for_ai_client(client):
     body = response.json()
     assert body["services"]["ai"] is True
     assert "analyze" in body["features"]
-    assert set(body["ai_modes"]) == {"maintenance_extraction", "inspection_extraction"}
+    assert set(body["ai_modes"]) == {"maintenance_extraction", "inspection_extraction", "contract_extraction"}
 
 
 def test_capabilities_hides_ai_modes_for_non_ai_client(client):
