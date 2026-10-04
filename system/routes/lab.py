@@ -22,8 +22,9 @@ import logging
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from system.ai.extraction_runner import run_extraction
 from system.ai.modes import MODES, get_mode
-from system.ai.prompting import build_prompt, validate_prompt_template
+from system.ai.prompting import validate_prompt_template
 from system.ai.resolver import resolve_model_profile
 from system.auth import get_authenticated_client, require_ai_service, require_prompt_lab_service
 from system.config import ClientConfig
@@ -147,16 +148,18 @@ def draft_analyze(
     profile_name, profile = resolve_model_profile(mode, client, settings)
     # Never the mode's active/persisted prompt - always exactly the draft
     # the client just sent (task §16/§17: this call must never touch or
-    # be influenced by the active version at all).
-    prompt = build_prompt(body.prompt, body.context, body.text)
-
+    # be influenced by the active version at all). Same input handling
+    # (incl. contract text optimization) as /documents/analyze via the
+    # shared runner - a draft is tested exactly like a real request.
     _log(request, client, "draft_analyze", mode.name)
-    result = request.app.state.ollama_client.generate_structured(
-        prompt,
-        mode.response_schema,
-        model=profile.model,
-        timeout_seconds=profile.timeout_seconds,
-        temperature=profile.temperature,
+    outcome = run_extraction(
+        mode=mode,
+        prompt_template=body.prompt,
+        context=body.context,
+        text=body.text,
+        profile=profile,
+        ollama_client=request.app.state.ollama_client,
+        optimization_settings=settings.text_optimization,
     )
 
     return LabAnalyzeResponse(
@@ -167,7 +170,8 @@ def draft_analyze(
             prompt_sha256=hashlib.sha256(body.prompt.encode("utf-8")).hexdigest(),
             model_profile=profile_name,
             model=profile.model,
-            result=result,
+            result=outcome.result,
+            text_optimization=outcome.optimization,
         ),
     )
 

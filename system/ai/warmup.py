@@ -55,7 +55,10 @@ def run_warmup(request: Request, client: ClientConfig, mode: _ModeLike, logger: 
     started_at = time.monotonic()
     try:
         request.app.state.ollama_client.warm_up(
-            model=profile.model, timeout_seconds=timeout_seconds, timing=timing
+            model=profile.model,
+            timeout_seconds=timeout_seconds,
+            timing=timing,
+            num_ctx=profile.context_window_tokens,
         )
     except DocPipeError as exc:
         logger.info(

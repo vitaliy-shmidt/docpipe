@@ -108,7 +108,10 @@ class FakeOllamaClient:
         self.mode = "success"
         self.result = dict(SAMPLE_MAINTENANCE_RESULT)
         self.calls = 0
+        self.prompts: list[str] = []
         self.last_prompt = None
+        self.last_num_ctx = None
+        self.last_warmup_num_ctx = None
         self.last_model = None
         self.last_timeout_seconds = None
         self.last_temperature = None
@@ -139,9 +142,13 @@ class FakeOllamaClient:
         timeout_seconds: float,
         temperature: float,
         timing: dict | None = None,
+        num_ctx: int | None = None,
+        deadline: float | None = None,
     ) -> dict:
         self.calls += 1
+        self.prompts.append(prompt)
         self.last_prompt = prompt
+        self.last_num_ctx = num_ctx
         self.last_model = model
         self.last_timeout_seconds = timeout_seconds
         self.last_temperature = temperature
@@ -167,8 +174,11 @@ class FakeOllamaClient:
             raise DocPipeError("ai_processing_failed", "AI analysis failed.")
         raise AssertionError(f"unexpected fake ollama mode: {self.mode}")
 
-    def warm_up(self, *, model: str, timeout_seconds: float, timing: dict | None = None) -> None:
+    def warm_up(
+        self, *, model: str, timeout_seconds: float, timing: dict | None = None, num_ctx: int | None = None
+    ) -> None:
         self.warmup_calls += 1
+        self.last_warmup_num_ctx = num_ctx
         self.last_warmup_model = model
         self.last_warmup_timeout_seconds = timeout_seconds
         if timing is not None:

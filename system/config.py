@@ -41,6 +41,11 @@ import yaml
 
 from system.ai.modes import MODES, PROMPTS_DIR
 from system.ai.prompt_registry import PromptRegistry
+from system.ai.text_optimization.settings import (
+    OPTIMIZABLE_MODES,
+    TextOptimizationSettings,
+    default_text_optimization,
+)
 from system.assistant.modes import ASSISTANT_MODES
 
 DEFAULT_CONFIG_PATH = "config.yaml"
@@ -149,6 +154,13 @@ class ModelProfile:
     model: str
     timeout_seconds: int
     temperature: float = 0.0
+    # Optional context window in tokens, sent to Ollama as options.num_ctx
+    # on every call for this profile (analyze, assistant, warm-up alike, so
+    # Ollama never reloads the model over a changed context size). None =
+    # not sent, Ollama's own default applies - and the contract text
+    # optimizer then budgets with text_optimization's
+    # assumed_context_window_tokens instead (docs/contract-text-optimization.md).
+    context_window_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +216,9 @@ class Settings:
     ollama: OllamaSettings
     prompts: PromptSettings = PromptSettings()
     models: dict[str, ModelProfile] = field(default_factory=dict)
+    # mode name -> text optimization settings (docs/contract-text-optimization.md).
+    # Every optimizable mode is present - enabled unless config disables it.
+    text_optimization: dict[str, TextOptimizationSettings] = field(default_factory=default_text_optimization)
     clients: dict[str, ClientConfig] = field(default_factory=dict)
 
     def find_client_by_api_key(self, api_key: str) -> ClientConfig | None:
@@ -239,13 +254,95 @@ def _parse_model_profiles(raw_models: object) -> dict[str, ModelProfile]:
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"Model profile '{profile_name}' has a non-numeric temperature.") from exc
 
+        raw_context_window = raw_profile.get("context_window_tokens")
+        context_window_tokens = None
+        if raw_context_window is not None:
+            try:
+                context_window_tokens = int(raw_context_window)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"Model profile '{profile_name}' has a non-numeric context_window_tokens."
+                ) from exc
+
         profiles[profile_name] = ModelProfile(
             provider=str(raw_profile.get("provider", "")),
             model=str(raw_profile.get("model", "")),
             timeout_seconds=timeout_seconds,
             temperature=temperature,
+            context_window_tokens=context_window_tokens,
         )
     return profiles
+
+
+# Lower bound for an explicit context window - anything smaller cannot even
+# hold an extraction prompt template plus an answer.
+MIN_CONTEXT_WINDOW_TOKENS = 2048
+
+_TEXT_OPTIMIZATION_INT_KEYS = (
+    "direct_limit_chars",
+    "target_chars",
+    "chunk_target_chars",
+    "head_chars",
+    "tail_chars",
+    "assumed_context_window_tokens",
+)
+_TEXT_OPTIMIZATION_BOOL_KEYS = ("enabled", "chunking_enabled", "timeout_fallback_enabled")
+_TEXT_OPTIMIZATION_KEYS = {
+    *_TEXT_OPTIMIZATION_INT_KEYS,
+    *_TEXT_OPTIMIZATION_BOOL_KEYS,
+    "primary_timeout_ratio",
+}
+
+
+def _parse_text_optimization(raw: object) -> dict[str, TextOptimizationSettings]:
+    """`text_optimization:` - mode name -> overrides of TextOptimizationSettings'
+    defaults. Optional; every optimizable mode not listed keeps the
+    (enabled) defaults. Unknown modes/keys and nonsensical values fail
+    startup like every other config error."""
+    result = default_text_optimization()
+    if not raw:
+        return result
+    if not isinstance(raw, dict):
+        raise ConfigError("'text_optimization' must be a mapping of mode name -> settings.")
+    for mode_name, raw_mode in raw.items():
+        if mode_name not in OPTIMIZABLE_MODES:
+            raise ConfigError(
+                f"text_optimization: mode '{mode_name}' does not support text optimization "
+                f"(supported: {sorted(OPTIMIZABLE_MODES)})."
+            )
+        if not isinstance(raw_mode, dict):
+            raise ConfigError(f"text_optimization.{mode_name} must be a mapping.")
+        unknown = set(raw_mode) - _TEXT_OPTIMIZATION_KEYS
+        if unknown:
+            raise ConfigError(f"text_optimization.{mode_name} has unknown keys: {sorted(unknown)}.")
+        values: dict = {}
+        for key in _TEXT_OPTIMIZATION_BOOL_KEYS:
+            if key in raw_mode:
+                values[key] = bool(raw_mode[key])
+        for key in _TEXT_OPTIMIZATION_INT_KEYS:
+            if key in raw_mode:
+                try:
+                    values[key] = int(raw_mode[key])
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError(f"text_optimization.{mode_name}.{key} must be an integer.") from exc
+                if values[key] < 0 or (values[key] == 0 and key not in ("head_chars", "tail_chars")):
+                    raise ConfigError(f"text_optimization.{mode_name}.{key} must be positive.")
+        prefix = f"text_optimization.{mode_name}"
+        if "primary_timeout_ratio" in raw_mode:
+            try:
+                ratio = float(raw_mode["primary_timeout_ratio"])
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"{prefix}.primary_timeout_ratio must be a number.") from exc
+            if not 0.2 <= ratio <= 1.0:
+                raise ConfigError(f"{prefix}.primary_timeout_ratio must be between 0.2 and 1.0.")
+            values["primary_timeout_ratio"] = ratio
+        assumed_window = values.get("assumed_context_window_tokens", MIN_CONTEXT_WINDOW_TOKENS)
+        if assumed_window < MIN_CONTEXT_WINDOW_TOKENS:
+            raise ConfigError(
+                f"{prefix}.assumed_context_window_tokens must be >= {MIN_CONTEXT_WINDOW_TOKENS}."
+            )
+        result[mode_name] = TextOptimizationSettings(**values)
+    return result
 
 
 def _parse_model_overrides(client_id: str, raw_overrides: object) -> dict[str, str]:
@@ -284,6 +381,12 @@ def _validate_model_profile_shapes(models: dict[str, ModelProfile]) -> None:
             raise ConfigError(
                 f"Model profile '{profile_name}' has an invalid temperature: {profile.temperature} "
                 "(must be >= 0)."
+            )
+        context_window = profile.context_window_tokens
+        if context_window is not None and context_window < MIN_CONTEXT_WINDOW_TOKENS:
+            raise ConfigError(
+                f"Model profile '{profile_name}' has an invalid context_window_tokens: "
+                f"{profile.context_window_tokens} (must be >= {MIN_CONTEXT_WINDOW_TOKENS})."
             )
 
 
@@ -441,7 +544,13 @@ def load_settings() -> Settings:
         )
 
     settings = Settings(
-        server=server, stirling=stirling, ollama=ollama, prompts=prompts, models=models, clients=clients
+        server=server,
+        stirling=stirling,
+        ollama=ollama,
+        prompts=prompts,
+        models=models,
+        clients=clients,
+        text_optimization=_parse_text_optimization(raw.get("text_optimization")),
     )
 
     # Unconditional (see _validate_prompt_defaults docstring) - unlike

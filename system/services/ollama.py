@@ -64,6 +64,15 @@ _OLLAMA_NS_METRIC_FIELDS = {
 }
 
 
+def _bounded_timeout(timeout_seconds: float, deadline: float | None) -> float:
+    if deadline is None:
+        return timeout_seconds
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise DocPipeError("ai_timeout", "AI analysis timed out.")
+    return min(timeout_seconds, remaining)
+
+
 class OllamaClient:
     def __init__(self, base_url: str, keep_alive: str | None = None) -> None:
         self._base_url = base_url
@@ -82,6 +91,8 @@ class OllamaClient:
         timeout_seconds: float,
         temperature: float,
         timing: dict | None = None,
+        num_ctx: int | None = None,
+        deadline: float | None = None,
     ) -> dict:
         """Runs prompt against `model` and validates the JSON result against schema.
 
@@ -98,9 +109,16 @@ class OllamaClient:
         parameter rather than a return-value change so the method's return
         contract (a plain result dict) stays exactly as every existing
         caller/test already expects.
+
+        `num_ctx`: the model profile's context window (Ollama option), only
+        sent when the profile configures one. `deadline` (time.monotonic()
+        value): an overall cut-off shared by several calls of one request -
+        each HTTP call, the repair call included, then gets at most the time
+        left until it (see system/ai/extraction_runner.py).
         """
         raw, metrics = self._call(
-            prompt, schema, model=model, timeout_seconds=timeout_seconds, temperature=temperature
+            prompt, schema, model=model, timeout_seconds=_bounded_timeout(timeout_seconds, deadline),
+            temperature=temperature, num_ctx=num_ctx,
         )
         self._record_timing(timing, "primary", metrics)
         result = self._parse_and_validate(raw, schema)
@@ -110,7 +128,8 @@ class OllamaClient:
 
         repair_prompt = self._build_repair_prompt(prompt, raw, schema)
         raw, metrics = self._call(
-            repair_prompt, schema, model=model, timeout_seconds=timeout_seconds, temperature=temperature
+            repair_prompt, schema, model=model, timeout_seconds=_bounded_timeout(timeout_seconds, deadline),
+            temperature=temperature, num_ctx=num_ctx,
         )
         self._record_timing(timing, "repair", metrics)
         result = self._parse_and_validate(raw, schema)
@@ -122,15 +141,25 @@ class OllamaClient:
         raise DocPipeError("ai_invalid_response", "The AI model did not return a valid structured response.")
 
     def _call(
-        self, prompt: str, schema: dict, *, model: str, timeout_seconds: float, temperature: float
+        self,
+        prompt: str,
+        schema: dict,
+        *,
+        model: str,
+        timeout_seconds: float,
+        temperature: float,
+        num_ctx: int | None = None,
     ) -> tuple[str, dict]:
         url = self._base_url.rstrip("/") + GENERATE_PATH
+        options: dict = {"temperature": temperature}
+        if num_ctx:
+            options["num_ctx"] = num_ctx
         payload = {
             "model": model,
             "prompt": prompt,
             "stream": False,
             "format": schema,
-            "options": {"temperature": temperature},
+            "options": options,
         }
         if self._keep_alive:
             payload["keep_alive"] = self._keep_alive
@@ -154,16 +183,22 @@ class OllamaClient:
         metrics = {"duration_ms": duration_ms, **self._extract_ollama_metrics(body)}
         return str(body.get("response", "")), metrics
 
-    def warm_up(self, *, model: str, timeout_seconds: float, timing: dict | None = None) -> None:
+    def warm_up(
+        self, *, model: str, timeout_seconds: float, timing: dict | None = None, num_ctx: int | None = None
+    ) -> None:
         """Load `model` into Ollama's memory without producing a real answer.
 
         Same request/error-mapping shape as `_call`, but with no `format`
         schema (a warm-up has no structured answer to validate) and no
         repair loop - the caller only cares that Ollama accepted the model
-        and, if configured, refreshed `keep_alive`.
+        and, if configured, refreshed `keep_alive`. `num_ctx` must match
+        what the real calls send: Ollama reloads a model whose context size
+        changes, which would make the warm-up useless.
         """
         url = self._base_url.rstrip("/") + GENERATE_PATH
-        payload = {"model": model, "prompt": "", "stream": False}
+        payload: dict = {"model": model, "prompt": "", "stream": False}
+        if num_ctx:
+            payload["options"] = {"num_ctx": num_ctx}
         if self._keep_alive:
             payload["keep_alive"] = self._keep_alive
         started_at = time.monotonic()

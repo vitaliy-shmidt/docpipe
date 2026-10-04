@@ -89,6 +89,10 @@ class AnalyzeData(BaseModel):
     model: str
     prompt_version: str
     result: dict[str, Any]
+    # Optional, additive (docs/contract-text-optimization.md "Diagnostics"):
+    # sizes/strategy/timings of the transient AI-input optimization, null
+    # for modes without it. Never document text. Older consumers ignore it.
+    text_optimization: dict[str, Any] | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -153,6 +157,8 @@ class LabAnalyzeData(BaseModel):
     model_profile: str
     model: str
     result: dict[str, Any]
+    # Same optional diagnostics as AnalyzeData.text_optimization.
+    text_optimization: dict[str, Any] | None = None
 
 
 class LabAnalyzeResponse(BaseModel):

@@ -30,8 +30,8 @@ import time
 
 from fastapi import APIRouter, Depends, Request
 
+from system.ai.extraction_runner import run_extraction
 from system.ai.modes import get_mode
-from system.ai.prompting import build_prompt
 from system.ai.resolver import resolve_model_profile
 from system.ai.warmup import run_warmup
 from system.auth import get_authenticated_client, require_ai_service
@@ -74,7 +74,6 @@ def analyze(
     registry = request.app.state.prompt_registry
     prompt_version = registry.resolve_active_version(mode.name, mode.default_prompt_version)
     prompt_template = registry.load_prompt(mode.name, prompt_version)
-    prompt = build_prompt(prompt_template, body.context, body.text)
 
     # Same request_id as the generic access-log line (main.py middleware),
     # for correlation - but with the AI-specific dimensions that line
@@ -93,49 +92,27 @@ def analyze(
         "input_chars": len(body.text),
         "context_chars": context_chars,
     }
-    timing: dict = {}
+    # Contract text optimization (docs/contract-text-optimization.md):
+    # body.text itself is never modified - the runner plans the AI input
+    # from a per-request copy. Only sizes/strategy/timings are logged.
+    observed: dict = {}
     started_at = time.monotonic()
     try:
-        result = request.app.state.ollama_client.generate_structured(
-            prompt,
-            mode.response_schema,
-            model=profile.model,
-            timeout_seconds=profile.timeout_seconds,
-            temperature=profile.temperature,
-            timing=timing,
+        outcome = run_extraction(
+            mode=mode,
+            prompt_template=prompt_template,
+            context=body.context,
+            text=body.text,
+            profile=profile,
+            ollama_client=request.app.state.ollama_client,
+            optimization_settings=settings.text_optimization,
+            observed=observed,
         )
     except DocPipeError as exc:
-        total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
-        logger.info(
-            "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
-            "model_profile=%(model_profile)s model=%(model)s prompt_version=%(prompt_version)s "
-            "input_chars=%(input_chars)s context_chars=%(context_chars)s status=%(status)s "
-            "repair_used=%(repair_used)s ollama_duration_ms=%(ollama_duration_ms)s "
-            "total_duration_ms=%(total_duration_ms)s",
-            {
-                **log_fields,
-                "status": exc.code,
-                "repair_used": "ollama_repair_duration_ms" in timing,
-                "ollama_duration_ms": timing.get("ollama_duration_ms"),
-                "total_duration_ms": total_duration_ms,
-            },
-        )
+        _log_analyze(log_fields, observed, exc.code, started_at)
         raise
 
-    total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
-    logger.info(
-        "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
-        "model_profile=%(model_profile)s model=%(model)s prompt_version=%(prompt_version)s "
-        "input_chars=%(input_chars)s context_chars=%(context_chars)s status=success "
-        "repair_used=%(repair_used)s ollama_duration_ms=%(ollama_duration_ms)s "
-        "total_duration_ms=%(total_duration_ms)s",
-        {
-            **log_fields,
-            "repair_used": "ollama_repair_duration_ms" in timing,
-            "ollama_duration_ms": timing.get("ollama_duration_ms"),
-            "total_duration_ms": total_duration_ms,
-        },
-    )
+    _log_analyze(log_fields, observed, "success", started_at)
 
     return AnalyzeResponse(
         ok=True,
@@ -144,8 +121,39 @@ def analyze(
             model_profile=profile_name,
             model=profile.model,
             prompt_version=prompt_version,
-            result=result,
+            result=outcome.result,
+            text_optimization=outcome.optimization,
         ),
+    )
+
+
+def _log_analyze(log_fields: dict, observed: dict, status: str, started_at: float) -> None:
+    timing = observed.get("timing") or {}
+    optimization = observed.get("optimization") or {}
+    logger.info(
+        "request_id=%(request_id)s client_id=%(client_id)s mode=%(mode)s "
+        "model_profile=%(model_profile)s model=%(model)s prompt_version=%(prompt_version)s "
+        "input_chars=%(input_chars)s context_chars=%(context_chars)s status=%(status)s "
+        "strategy=%(strategy)s normalized_chars=%(normalized_chars)s optimized_chars=%(optimized_chars)s "
+        "chunk_count=%(chunk_count)s ai_calls=%(ai_calls)s fallback_used=%(fallback_used)s "
+        "normalization_ms=%(normalization_ms)s optimization_ms=%(optimization_ms)s "
+        "repair_used=%(repair_used)s ollama_duration_ms=%(ollama_duration_ms)s "
+        "total_duration_ms=%(total_duration_ms)s",
+        {
+            **log_fields,
+            "status": status,
+            "strategy": optimization.get("strategy", "-"),
+            "normalized_chars": optimization.get("normalized_chars"),
+            "optimized_chars": optimization.get("optimized_chars"),
+            "chunk_count": optimization.get("chunk_count"),
+            "ai_calls": optimization.get("ai_calls"),
+            "fallback_used": optimization.get("fallback_used"),
+            "normalization_ms": optimization.get("normalization_ms"),
+            "optimization_ms": optimization.get("optimization_ms"),
+            "repair_used": "ollama_repair_duration_ms" in timing,
+            "ollama_duration_ms": timing.get("ollama_duration_ms"),
+            "total_duration_ms": round((time.monotonic() - started_at) * 1000, 1),
+        },
     )
 
 

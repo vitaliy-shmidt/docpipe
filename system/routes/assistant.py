@@ -139,6 +139,7 @@ def assistant_query(
             timeout_seconds=profile.timeout_seconds,
             temperature=profile.temperature,
             timing=timing,
+            num_ctx=profile.context_window_tokens,
         )
     except DocPipeError as exc:
         total_duration_ms = round((time.monotonic() - started_at) * 1000, 1)
