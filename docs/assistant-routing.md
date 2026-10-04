@@ -35,6 +35,7 @@ implementation for the assistant.
 | `document_question` | standard | a question about a specific document's content |
 | `hotel_health_summary` | standard | an overall technical-state summary |
 | `general_hotel_question` | light | fallback - doesn't clearly match a more specific mode |
+| `cross_domain_question` | standard | V2: several domains at once, or a domain without a dedicated mode (see below) |
 
 Unlike extraction modes, there is **no per-client model-profile
 override** for assistant modes yet (see "Not implemented") - every
@@ -93,7 +94,7 @@ flattened into `key: value` lines the way extraction context is - nested
 structures (a whole maintenance-items list) render far more reliably that
 way than a flattened line ever would.
 
-## Grounding rules (every assistant prompt, `system/prompts/assistant/*/v1.txt`)
+## Grounding rules (every assistant prompt, `system/prompts/assistant/*/v*.txt`)
 
 - Use only the supplied context.
 - Never invent, assume, or guess a fact not explicitly present in it.
@@ -145,6 +146,66 @@ POST /api/v1/assistant/query
 JSON-serialized (both `input_too_large`, 413) - bounded, not tuned; a
 real question is a short sentence, a real context payload is a prepared
 summary, never a database dump.
+
+## Assistant V2 - domains, short history, cross-domain mode
+
+HubDix V2 runs one conversational widget per module page (Contracts,
+Maintenance, Projects ...). Two optional request fields support that
+without moving any decision about data, rights or models into the client
+payload:
+
+```json
+POST /api/v1/assistant/query
+{
+  "question": "Wie viel kostet er im Monat?",
+  "domains": ["contracts"],
+  "history": [
+    { "role": "user", "content": "Finde mir den Vertrag mit Firma X." },
+    { "role": "assistant", "content": "Gefunden: Vertrag 4711 ..." }
+  ],
+  "context": { "domains": { "contracts": { "selected": { "...": "..." } } } }
+}
+```
+
+- **`domains`** (optional, list of names) - a task hint like an extraction
+  `mode`, never a model/profile/prompt. Known names:
+  `hotel_health`, `contracts`, `maintenance`, `inspections`, `documents`,
+  `projects`, `defects` (`system/assistant/domains.py`, reported as
+  `assistant_domains` by `/capabilities`). Unknown name or more than
+  `MAX_DOMAINS` (4, a payload guard only - the product limit lives in
+  HubDix) -> `invalid_request`.
+- **Routing with domains** (`resolve_assistant_route`, deterministic):
+  no domains or `["hotel_health"]` -> the legacy keyword router above,
+  unchanged; one focused domain -> that domain's mode (so a keyword-less
+  follow-up like *"Wie viel kostet er?"* stays `contract_question`), or
+  `document_question` when the question has document intent and the domain
+  allows it (`matched_rule` `domain:contracts+document_keywords`);
+  `projects`/`defects` (no dedicated mode) or several domains ->
+  `cross_domain_question` (`matched_rule` `domains:contracts+projects`).
+- **`cross_domain_question`** (standard profile, `v1`) - answers from one
+  context block per domain, may only combine entities across domains when
+  the context explicitly lists the relation, names the domain each fact
+  comes from, and treats `"available": false` as "area not available".
+- **`history`** (optional, max 8 turns, each max 2,000 characters, role
+  `user`|`assistant` only - `input_too_large` 413 / `invalid_request` 400)
+  - rendered into the `v2` prompts' `HISTORY` block. History is used only
+  to resolve what the question refers to; it is explicitly **not** a
+  source of facts. The consumer keeps the structured state (selected
+  entity, active domains) and re-sends fresh, scope-checked context every
+  turn, so the model never needs a long transcript.
+- **Prompts v2** - every pre-existing assistant mode now defaults to `v2`
+  (`v1` stays in the registry; a `v1` template simply ignores history). v2
+  adds: ask instead of silently picking one of several candidates, say
+  what the assistant can help with on an off-topic question (never answer
+  from general knowledge), mention when a document text was truncated,
+  keep answers short.
+- **Warm-up with domains** - `POST /api/v1/assistant/warmup` accepts the
+  same optional `domains`; it warms the model of the mode a conversation in
+  those domains starts with (`warmup_mode_for_domains`), e.g.
+  `["contracts"]` -> light, `["contracts","projects"]` -> standard. No
+  domains = `hotel_health_summary` as before.
+- **Logging** - additionally `domains` and `history_turns` (a count); never
+  question, history content, context or answer.
 
 ## Permissions
 
@@ -216,9 +277,8 @@ POST /api/v1/assistant/warmup
 
 ## Not implemented (by design - this is a foundation, not the assistant)
 
-- The actual HubDix-facing "Frag HubDix" feature/button - this pass ships
-  the endpoint DocPipe exposes, not a HubDix integration that calls it in
-  production.
+- Any conversation storage - DocPipe is stateless; HubDix persists the
+  conversation and sends at most 8 short history turns per call.
 - Any database access, SQL generation, tool calling, function calling,
   recursive planning, autonomous loops, or web access - the router
   classifies text, the endpoint calls Ollama with server-trusted context;

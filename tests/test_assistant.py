@@ -67,7 +67,8 @@ def test_assistant_routes_maintenance_question(client):
     assert body["matched_rule"] == "maintenance_keywords"
     assert body["model_profile"] == "light"
     assert body["model"] == LIGHT_MODEL
-    assert body["prompt_version"] == "v1"
+    # Assistant V2: assistant prompts default to v2 (history-aware).
+    assert body["prompt_version"] == "v2"
     assert body["answer"] == "2 Wartungen sind überfällig."
 
 
@@ -160,6 +161,16 @@ def test_capabilities_reports_assistant_modes_for_assistant_client(client):
         "contract_question",
         "document_question",
         "general_hotel_question",
+        "cross_domain_question",
+    }
+    assert set(body["assistant_domains"]) == {
+        "hotel_health",
+        "contracts",
+        "maintenance",
+        "inspections",
+        "documents",
+        "projects",
+        "defects",
     }
 
 
@@ -169,6 +180,7 @@ def test_capabilities_hides_assistant_modes_for_non_assistant_client(client):
     assert body["services"]["assistant"] is False
     assert "assistant" not in body["features"]
     assert body["assistant_modes"] is None
+    assert body["assistant_domains"] is None
 
 
 # --- Timing Metrics pass (task §11/§14/§33) ---------------------------------

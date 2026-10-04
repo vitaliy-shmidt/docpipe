@@ -7,7 +7,7 @@ processing engine (Stirling) to consume these responses.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +35,9 @@ class CapabilitiesResponse(BaseModel):
     # Only populated when services.assistant is true for the calling
     # client - same discovery principle as ai_modes above.
     assistant_modes: list[str] | None = None
+    # Assistant V2: valid `domains` values for /assistant/query and
+    # /assistant/warmup (same discovery principle).
+    assistant_domains: list[str] | None = None
 
 
 # Additive response metadata (see documents.py): "embedded_text" means the
@@ -197,11 +200,24 @@ class ActivatePromptVersionResponse(BaseModel):
 # supporting data the answer must be grounded in.
 
 
+class AssistantHistoryTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class AssistantQueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str
     context: dict[str, Any] = Field(default_factory=dict)
+    # Assistant V2 (see system/assistant/domains.py): data areas the
+    # consumer prepared context for - a task hint, never a model/profile.
+    domains: list[str] = Field(default_factory=list)
+    # Short conversation history (oldest first), used only to resolve
+    # references; bounded in system/routes/assistant.py.
+    history: list[AssistantHistoryTurn] = Field(default_factory=list)
 
 
 class AssistantQueryData(BaseModel):
@@ -219,11 +235,14 @@ class AssistantQueryResponse(BaseModel):
 
 
 class AssistantWarmupRequest(BaseModel):
-    """Deliberately empty: extra="forbid" rejects model/prompt/keep_alive/
-    hotel_id/context/question - warm-up takes no client-supplied input,
-    everything is resolved server-side (see system/routes/assistant.py)."""
+    """extra="forbid" rejects model/prompt/keep_alive/hotel_id/context/
+    question - warm-up takes no data. Assistant V2: optional `domains` (the
+    same task hint /assistant/query accepts) selects which mode's model is
+    warmed; omitted = the cockpit's hotel_health_summary as before."""
 
     model_config = ConfigDict(extra="forbid")
+
+    domains: list[str] = Field(default_factory=list)
 
 
 class AssistantWarmupData(BaseModel):

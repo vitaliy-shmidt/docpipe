@@ -414,11 +414,12 @@ Reflects what the calling client is actually allowed to use.
   "services": { "documents": true, "ai": true, "prompt_lab": true, "assistant": true },
   "features": ["extract_text", "ocr_fallback", "analyze", "prompt_lab", "assistant"],
   "ai_modes": ["maintenance_extraction", "inspection_extraction", "contract_extraction"],
-  "assistant_modes": ["hotel_health_summary", "maintenance_question", "inspection_question", "contract_question", "document_question", "general_hotel_question"]
+  "assistant_modes": ["hotel_health_summary", "maintenance_question", "inspection_question", "contract_question", "document_question", "general_hotel_question", "cross_domain_question"],
+  "assistant_domains": ["hotel_health", "contracts", "maintenance", "inspections", "documents", "projects", "defects"]
 }
 ```
 
-`ai_modes`/`assistant_modes` are only present (non-null) when
+`ai_modes`/`assistant_modes`/`assistant_domains` are only present (non-null) when
 `services.ai`/`services.assistant` is true for the calling client.
 `ocr_fallback` is only present when `documents` is enabled for the client
 *and* `stirling.ocr.enabled` is true server-wide (OCR is a server
@@ -493,6 +494,11 @@ question to one of a fixed set of assistant modes and answers it strictly
 from caller-supplied `context` - full contract, trust boundary, and
 grounding rules in [docs/assistant-routing.md](docs/assistant-routing.md).
 Not a full hotel assistant - a routing/prompting foundation for one.
+Assistant V2 adds two optional fields: `domains` (task hint, routes a
+keyword-less follow-up to the domain's mode, several domains ->
+`cross_domain_question`) and `history` (max 8 short turns, used only to
+resolve references, never as facts). `/assistant/warmup` also accepts
+`domains`. Details: "Assistant V2" in [docs/assistant-routing.md](docs/assistant-routing.md).
 
 ### Error contract
 

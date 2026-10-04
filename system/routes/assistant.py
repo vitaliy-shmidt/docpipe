@@ -26,9 +26,9 @@ from fastapi import APIRouter, Body, Depends, Request
 
 from system.ai.resolver import resolve_model_profile
 from system.ai.warmup import run_warmup
+from system.assistant.domains import resolve_assistant_route, validate_domains, warmup_mode_for_domains
 from system.assistant.modes import ANSWER_SCHEMA, get_assistant_mode
 from system.assistant.prompting import build_assistant_prompt
-from system.assistant.router import route
 from system.auth import get_authenticated_client, require_assistant_service
 from system.config import ClientConfig
 from system.errors import DocPipeError
@@ -48,6 +48,11 @@ logger = logging.getLogger("docpipe.assistant")
 # real context payload is a prepared summary, not a database dump.
 MAX_QUESTION_LENGTH = 5_000
 MAX_CONTEXT_SERIALIZED_LENGTH = 100_000
+# Assistant V2: a SHORT history only - the consumer keeps structured state
+# (selected entity etc.) and re-sends fresh context every turn, so the
+# model never needs a long transcript. Bounded per turn and in total.
+MAX_HISTORY_TURNS = 8
+MAX_HISTORY_TURN_LENGTH = 2_000
 
 # Warm-up mode: the cockpit's Hotel Health card is the only caller today, so
 # warming the model it uses is the useful thing to pre-load (task §36 - not
@@ -81,7 +86,18 @@ def assistant_query(
             f"context exceeds the maximum serialized length of {MAX_CONTEXT_SERIALIZED_LENGTH} characters.",
         )
 
-    assistant_route = route(question)
+    domains = validate_domains(body.domains)
+    if len(body.history) > MAX_HISTORY_TURNS:
+        raise DocPipeError("input_too_large", f"history exceeds {MAX_HISTORY_TURNS} messages.")
+    history = []
+    for turn in body.history:
+        if len(turn.content) > MAX_HISTORY_TURN_LENGTH:
+            raise DocPipeError(
+                "input_too_large", f"a history message exceeds {MAX_HISTORY_TURN_LENGTH} characters."
+            )
+        history.append({"role": turn.role, "content": turn.content})
+
+    assistant_route = resolve_assistant_route(question, domains)
     mode = get_assistant_mode(assistant_route.mode)
     assert mode is not None  # router only ever returns a name that exists in ASSISTANT_MODES
 
@@ -92,7 +108,7 @@ def assistant_query(
     subdir = f"assistant/{mode.name}"
     prompt_version = registry.resolve_active_version(subdir, mode.default_prompt_version)
     prompt_template = registry.load_prompt(subdir, prompt_version)
-    prompt = build_assistant_prompt(prompt_template, body.context, question)
+    prompt = build_assistant_prompt(prompt_template, body.context, question, history)
 
     # Timing Metrics pass (task §11-§14): metadata-only, never question/
     # context/answer/prompt content. `timing` is populated in place by
@@ -110,6 +126,8 @@ def assistant_query(
         "prompt_version": prompt_version,
         "question_chars": len(question),
         "context_chars": len(serialized_context),
+        "domains": "+".join(domains) or "-",
+        "history_turns": len(history),
     }
     timing: dict = {}
     started_at = time.monotonic()
@@ -128,7 +146,8 @@ def assistant_query(
             "request_id=%(request_id)s client_id=%(client_id)s assistant_mode=%(assistant_mode)s "
             "matched_rule=%(matched_rule)s model_profile=%(model_profile)s model=%(model)s "
             "prompt_version=%(prompt_version)s question_chars=%(question_chars)s "
-            "context_chars=%(context_chars)s status=%(status)s "
+            "context_chars=%(context_chars)s domains=%(domains)s history_turns=%(history_turns)s "
+            "status=%(status)s "
             "ollama_duration_ms=%(ollama_duration_ms)s total_duration_ms=%(total_duration_ms)s",
             {
                 **log_fields,
@@ -144,7 +163,7 @@ def assistant_query(
         "request_id=%(request_id)s client_id=%(client_id)s assistant_mode=%(assistant_mode)s "
         "matched_rule=%(matched_rule)s model_profile=%(model_profile)s model=%(model)s "
         "prompt_version=%(prompt_version)s question_chars=%(question_chars)s "
-        "context_chars=%(context_chars)s status=success "
+        "context_chars=%(context_chars)s domains=%(domains)s history_turns=%(history_turns)s status=success "
         "ollama_duration_ms=%(ollama_duration_ms)s total_duration_ms=%(total_duration_ms)s",
         {
             **log_fields,
@@ -182,8 +201,12 @@ def assistant_warmup(
     """
     require_assistant_service(client)
 
-    mode = get_assistant_mode(WARMUP_MODE_NAME)
-    assert mode is not None  # WARMUP_MODE_NAME is a fixed, known-good ASSISTANT_MODES key
+    # Assistant V2: optional domains pick the mode a conversation in those
+    # domains starts with (system/assistant/domains.py); none = the cockpit's
+    # hotel_health_summary exactly as before.
+    domains = validate_domains(body.domains)
+    mode = get_assistant_mode(warmup_mode_for_domains(domains, WARMUP_MODE_NAME))
+    assert mode is not None  # always a known ASSISTANT_MODES key
 
     # Same shared helper as /api/v1/documents/warmup (system/ai/warmup.py) -
     # one warm-up implementation, two task-specific entry points.

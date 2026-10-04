@@ -54,37 +54,48 @@ class AssistantMode:
 ASSISTANT_MODES: dict[str, AssistantMode] = {
     "hotel_health_summary": AssistantMode(
         name="hotel_health_summary",
-        default_prompt_version="v1",
+        default_prompt_version="v2",
         model_profile="standard",
         description="Summarize a hotel's overall technical state from supplied maintenance/inspection data.",
     ),
     "maintenance_question": AssistantMode(
         name="maintenance_question",
-        default_prompt_version="v1",
+        default_prompt_version="v2",
         model_profile="light",
         description="Answer a question about maintenance items from supplied maintenance context.",
     ),
     "inspection_question": AssistantMode(
         name="inspection_question",
-        default_prompt_version="v1",
+        default_prompt_version="v2",
         model_profile="light",
         description="Answer a question about inspections from supplied inspection context.",
     ),
     "contract_question": AssistantMode(
         name="contract_question",
-        default_prompt_version="v1",
+        default_prompt_version="v2",
         model_profile="light",
         description="Answer a question about contracts from supplied contract context.",
     ),
     "document_question": AssistantMode(
         name="document_question",
-        default_prompt_version="v1",
+        default_prompt_version="v2",
         model_profile="standard",
         description="Answer a question about a specific document's content from supplied document context.",
     ),
+    # Assistant V2: several domains at once, or a domain without a dedicated
+    # mode (projects, defects) - see system/assistant/domains.py. Clearly
+    # labelled per-domain blocks, never an invented cross-domain relation.
+    # Defaults to "standard": combining blocks needs more judgement than a
+    # single-topic answer.
+    "cross_domain_question": AssistantMode(
+        name="cross_domain_question",
+        default_prompt_version="v1",
+        model_profile="standard",
+        description="Answer from several supplied domain blocks (or a domain without a dedicated mode).",
+    ),
     "general_hotel_question": AssistantMode(
         name="general_hotel_question",
-        default_prompt_version="v1",
+        default_prompt_version="v2",
         model_profile="light",
         description="Fallback for a hotel-related question that doesn't clearly match a more specific mode.",
     ),

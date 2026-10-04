@@ -30,9 +30,29 @@ def render_context_block(context: dict[str, Any]) -> str:
     return json.dumps(context, indent=2, ensure_ascii=False, default=str)
 
 
-def build_assistant_prompt(prompt_template: str, context: dict[str, Any], question: str) -> str:
+def render_history_block(history: list[dict[str, str]] | None) -> str:
+    """Assistant V2: short conversation history, oldest first.
+
+    Plain "User:/Assistant:" lines - the prompt tells the model to use it
+    only to resolve references, never as a source of facts. A v1 template
+    without a {history_block} placeholder simply ignores it (str.format
+    ignores unused keyword arguments), so v1 prompts keep working unchanged.
+    """
+    if not history:
+        return "(no previous messages)"
+    labels = {"user": "User", "assistant": "Assistant"}
+    return chr(10).join(f"{labels.get(turn['role'], 'User')}: {turn['content']}" for turn in history)
+
+
+def build_assistant_prompt(
+    prompt_template: str, context: dict[str, Any], question: str, history: list[dict[str, str]] | None = None
+) -> str:
     try:
-        return prompt_template.format(context_block=render_context_block(context), question=question)
+        return prompt_template.format(
+            context_block=render_context_block(context),
+            question=question,
+            history_block=render_history_block(history),
+        )
     except (KeyError, IndexError, ValueError) as exc:
         raise DocPipeError(
             "invalid_prompt",

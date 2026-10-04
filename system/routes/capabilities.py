@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 
 from system.ai.modes import MODES
+from system.assistant.domains import ASSISTANT_DOMAINS
 from system.assistant.modes import ASSISTANT_MODES
 from system.auth import get_authenticated_client
 from system.config import ClientConfig, Settings
@@ -42,4 +43,5 @@ def capabilities(
         features=features,
         ai_modes=list(MODES.keys()) if client.services.ai else None,
         assistant_modes=list(ASSISTANT_MODES.keys()) if client.services.assistant else None,
+        assistant_domains=list(ASSISTANT_DOMAINS.keys()) if client.services.assistant else None,
     )
