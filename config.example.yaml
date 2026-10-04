@@ -104,12 +104,36 @@ models:
     model: "your-medium-model"
     timeout_seconds: 150
     temperature: 0
+    # Optional, any profile: context window in tokens, sent to Ollama as
+    # options.num_ctx on every call of this profile (analyze, assistant,
+    # warm-up). Omitted = not sent, Ollama's default (4096) applies and
+    # contract text optimization budgets for that. 8192 lets
+    # contract_extraction send ~2x more relevant text per call at roughly
+    # 0.2-0.3 GB extra RAM for a 1.5B model - measure before raising further.
+    # See docs/contract-text-optimization.md "Configuration".
+    # context_window_tokens: 8192
 
   heavy:
     provider: ollama
     model: "your-large-model"
     timeout_seconds: 180
     temperature: 0
+
+# Optional - omit entirely for the defaults shown here (enabled). Transient
+# optimization of the AI input for contract_extraction only: the stored/
+# sent extracted text is never changed. See docs/contract-text-optimization.md.
+text_optimization:
+  contract_extraction:
+    enabled: true
+    direct_limit_chars: 8000      # complete normalized text up to this size
+    target_chars: 7000            # relevant passages for one call
+    chunking_enabled: true        # else one call per field group (basis/term/finance)
+    chunk_target_chars: 4500
+    head_chars: 1500              # always-kept document start
+    tail_chars: 600               # document end, if budget allows
+    timeout_fallback_enabled: true
+    primary_timeout_ratio: 0.65   # first call's share of the profile timeout
+    assumed_context_window_tokens: 4096   # for profiles without context_window_tokens
 
 clients:
   demo-client:

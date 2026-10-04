@@ -40,6 +40,10 @@ engine or model provider sits behind it, or how to talk to it.
 - A deterministic, keyword-routed assistant query endpoint - a technical
   foundation for a future hotel assistant, not the assistant itself
   (V2.2, optional per client - see [docs/assistant-routing.md](docs/assistant-routing.md))
+- Deterministic optimization of long contract texts before
+  `contract_extraction` (normalization, relevant-passage selection, chunked
+  extraction for very long contracts) - the AI input only, never the stored
+  text (see [docs/contract-text-optimization.md](docs/contract-text-optimization.md))
 - A normalized, stable success/error response contract across all of the above
 - Per-client service flags loaded from a local config file (no database)
 
@@ -58,8 +62,11 @@ engine or model provider sits behind it, or how to talk to it.
 - No persistence of uploaded documents — every request is processed
   in a temp file that is deleted immediately afterwards
 - No business logic specific to any consuming project (HubDix or otherwise)
-- No chunking of oversized AI input — a text over a mode's limit is
-  rejected, not silently split or truncated
+- No silent truncation of AI input — a text over a mode's
+  `max_input_length` is rejected. Below that, only `contract_extraction`
+  reduces/chunks its *AI input* (verbatim passages, never a summary - see
+  [docs/contract-text-optimization.md](docs/contract-text-optimization.md));
+  every other mode still sends the text as received
 - No arbitrary/client-supplied prompt on the normal AI path — a draft
   prompt is only ever accepted by `/lab/analyze`, gated by its own
   `prompt_lab` permission (see [docs/prompt-lab.md](docs/prompt-lab.md))
@@ -89,6 +96,8 @@ docpipe/
 │  │  ├─ modes.py                 # extraction mode registry (name -> schema+DEFAULT profile/prompt version)
 │  │  ├─ resolver.py               # mode + client -> concrete ModelProfile (extraction AND assistant)
 │  │  ├─ prompting.py               # builds the final extraction prompt from template+context+text
+│  │  ├─ extraction_runner.py        # analyze/Lab execution: optimized input, 1-3 calls, deadline, fallback
+│  │  ├─ text_optimization/          # contract text optimizer - see docs/contract-text-optimization.md
 │  │  └─ prompt_registry.py          # runtime-resolved, versioned prompt storage (V2.2) - see docs/prompt-lab.md
 │  ├─ assistant/                  # routing foundation (V2.2) - see docs/assistant-routing.md
 │  │  ├─ modes.py                 # assistant mode registry (name -> DEFAULT profile/prompt version)
@@ -126,7 +135,8 @@ docpipe/
 ├─ docs/
 │  ├─ staging-deployment.md   # deployment guide + validation checklist
 │  ├─ prompt-lab.md            # runtime prompt versioning + Lab API (V2.2)
-│  └─ assistant-routing.md      # assistant routing foundation (V2.2)
+│  ├─ assistant-routing.md      # assistant routing foundation (V2.2)
+│  └─ contract-text-optimization.md  # contract_extraction input optimization
 ├─ config.example.yaml        # template — copy to config.yaml, don't commit it
 ├─ .env.example
 ├─ Dockerfile
@@ -653,6 +663,12 @@ one extracts facts from a document.
   returned as text rather than interpreted. A consumer must treat every
   value as a suggestion for human review, never as a fact to persist
   automatically.
+- **Long documents**: the AI input is optimized deterministically
+  (normalization, then either the complete text, relevant verbatim
+  passages, or one call per field group, merged without AI). The request
+  and response contract is unchanged except for an optional, additive
+  `data.text_optimization` diagnostics object. Details, thresholds and
+  staging checks: [docs/contract-text-optimization.md](docs/contract-text-optimization.md).
 
 ### Request
 
@@ -916,8 +932,8 @@ wording, or provider details - see "Multi-project design" above.
 - Uploads are streamed to that temp file in chunks with a running size
   check, so an oversized upload is rejected without needing to be fully
   buffered in memory.
-- AI input has its own size cap per mode (`max_input_length`, no
-  chunking) — a text over that limit is rejected outright.
+- AI input has its own size cap per mode (`max_input_length`) — a text
+  over that limit is rejected outright, never truncated.
 - No retries: if Stirling or Ollama is unavailable, DocPipe answers
   immediately with the matching error code. Retrying is left to the
   calling client.
@@ -932,7 +948,11 @@ on every response for correlating client-side and server-side logs.
 `/documents/extract-text` additionally logs one line per successful
 request with input size, initial (pre-OCR) and final text *lengths*
 (never the text itself), whether OCR was attempted, the resulting
-`extraction_method`, and duration.
+`extraction_method`, and duration. `/documents/analyze` logs one line
+per request with mode, model profile/model, prompt version, input/context
+*sizes*, and for `contract_extraction` the optimization strategy, sizes,
+call count and timings (see docs/contract-text-optimization.md
+"Diagnostics").
 
 Never logged: API keys, the `Authorization` header, the Stirling/Ollama
 API keys, document contents/text (extracted or OCR'd), the uploaded
@@ -1006,6 +1026,16 @@ logging, Prompt Lab listing/load/draft-analyze/save+activate, and the
 real `OllamaClient` validation/repair/repair-failure/timeout/unavailable
 behavior against the real contract schema.
 
+Contract text optimization has two files: `tests/test_text_optimization.py`
+(normalization incl. header/footer/page-number/OCR-duplicate/hyphenation/
+table cases, DE/EN passage selection, head/tail/no-keyword behavior,
+direct/relevance/chunked thresholds on synthetic 3k-100k contracts, merge
+rules, a 100k-character performance check) and
+`tests/test_contract_text_optimization_pipeline.py` (runner strategies,
+shared deadline, bounded timeout fallback, analyze/Lab diagnostics and
+metadata-only logging, `num_ctx` wiring, `text_optimization` config
+validation). Synthetic texts live in `tests/contract_samples.py`.
+
 If you do have real Stirling/Ollama instances available locally, a
 manual end-to-end check with an actual PDF and a few real documents per
 AI mode is worthwhile before deploying — see
@@ -1015,7 +1045,8 @@ AI mode is worthwhile before deploying — see
 
 Semantic search, RAG, model training/fine-tuning, automatic document
 classification, a database, quotas/plans/usage/billing, user management,
-a web UI, persistent job storage, input chunking for oversized AI text,
+a web UI, persistent job storage, generic input chunking for AI modes
+other than `contract_extraction`,
 a second model provider (the `provider` field exists for one, but only
 `"ollama"` is implemented), `heavy`-profile modes (the `heavy` profile
 class exists so they can be added later without an architecture change,
