@@ -131,3 +131,86 @@ RELEVANT_SNIPPETS = (
     "verlängert sich automatisch",
     "Kündigungsfrist: 3 Monate",
 )
+
+
+# --- PDF-like layout (normalization V2) --------------------------------------
+# The same invented contract, but shaped like real PDF text extraction:
+# running text hard-wrapped at ~78 characters (German nouns at line starts),
+# a three-line letterhead and a footer with page counter on every page, rule
+# lines, NBSP/tab layout noise, one OCR double line and one hyphenated wrap.
+
+PDF_HEADER_LINES = (
+    "Musterlift Aufzugsservice GmbH",
+    "Wartungsvertrag WV-2026-0815",
+    "Beispielweg 12 · 12345 Musterstadt",
+)
+PDF_FOOTER_TEMPLATE = "Seite {page} von {pages}"
+
+PDF_NOTICE = (
+    "§ 14 Kündigung\n"
+    "Die Kündigungs-\nfrist beträgt 3 Monate zum Vertragsende. Die Kündigung bedarf\n"
+    "der Schriftform."
+)
+PDF_PRICE_TABLE = (
+    "§ 3 Vergütung\n"
+    "Leistung\t\tPreis\t\tIntervall\n"
+    "Wartung Aufzug 1\t450,00\u00a0€\tmonatlich\n"
+    "------------------------------------------------------------\n"
+    "Wartung Aufzug 2\t450,00\u00a0€\tmonatlich\n"
+    "Die Vergütung ist jeweils zum Monatsbeginn fällig."
+)
+PDF_TOC = (
+    "Inhaltsverzeichnis\n"
+    "§ 1 Vertragsgegenstand ........................................ 1\n"
+    "§ 2 Leistungsumfang ............................................ 1\n"
+    "§ 3 Vergütung .................................................. 2\n"
+    "§ 4 Laufzeit ................................................... 2\n"
+    "§ 5 Verlängerung ............................................... 3\n"
+    "§ 14 Kündigung ................................................. 9"
+)
+PDF_OCR_DOUBLE = "Der Vertrag verlängert sich automatisch um jeweils weitere 12 Monate."
+
+PDF_RELEVANT_SNIPPETS = (
+    "WV-2026-0815",
+    "Musterlift Aufzugsservice GmbH",
+    "Leistungsumfang",
+    "450,00 €",
+    "01.01.2026",
+    "verlängert sich automatisch",
+    "Kündigungsfrist beträgt 3 Monate",
+)
+
+
+def _wrap(paragraph: str, width: int = 78) -> str:
+    import textwrap
+
+    lines = paragraph.split("\n")
+    out = [lines[0]]  # heading line stays as is
+    for line in lines[1:]:
+        out.extend(textwrap.wrap(line, width, break_long_words=False, break_on_hyphens=False) or [""])
+    return "\n".join(out)
+
+
+def build_pdf_contract(target_chars: int, *, pages: int = 6) -> str:
+    renewal = (
+        f"§ 5 Verlängerung\n{PDF_OCR_DOUBLE}\n{PDF_OCR_DOUBLE}\n"
+        "Sofern er nicht fristgerecht beendet wird."
+    )
+    head = _wrap(HEAD.replace("\n\n", "\n"))
+    core = [head, PDF_TOC, _wrap(SUBJECT), _wrap(SERVICES), PDF_PRICE_TABLE, _wrap(TERM)]
+    tail = [PDF_NOTICE, SIGNATURES]
+    fixed = sum(len(part) + 2 for part in core + tail + [renewal])
+    remaining = max(0, target_chars - fixed)
+    filler_count = max(2, remaining // 1500)
+    size = remaining // filler_count
+    fillers = [_wrap(filler_section(6 + i, size, dense=True)) for i in range(filler_count)]
+    sections = core + fillers[: filler_count // 2] + [renewal] + fillers[filler_count // 2 :] + tail
+    per_page = max(1, len(sections) // pages)
+    header = "\n".join(PDF_HEADER_LINES)
+    out = []
+    for page in range(pages):
+        end = (page + 1) * per_page if page < pages - 1 else None
+        body = "\n\n".join(sections[page * per_page : end])
+        footer = "_" * 40 + "\n" + PDF_FOOTER_TEMPLATE.format(page=page + 1, pages=pages)
+        out.append(f"{header}\n\n\n\n{body}\n   \n\t\n{footer}\n")
+    return "\f".join(out)

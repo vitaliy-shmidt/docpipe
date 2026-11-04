@@ -174,7 +174,7 @@ the model**.
 
 Priority order:
 
-1. transient text normalization V2;
+1. transient text normalization V2 (**done 2026-11-04**, see below);
 2. compact `contract_extraction` prompt V2;
 3. expose the already-read Ollama phase metrics in safe logs;
 4. improve relevance/chunking decisions against the real prompt/context
@@ -209,6 +209,75 @@ KONE GmbH
 
 The persisted consumer-side `extracted_text` must remain untouched. The
 cleaned representation exists only for the lifetime of the AI request.
+
+### Status: implemented (2026-11-04)
+
+Rules, safety guarantees and limits:
+[contract-text-optimization.md, "Phase A"](contract-text-optimization.md#phase-a---normalization-normalizepy-v2).
+No configuration option was added, the heuristics live in code. Diagnostics are
+unchanged: `raw_chars`/`normalized_chars` already show the effect.
+
+Synthetic measurements (`tests/contract_samples.py`, local dev machine,
+normalization only):
+
+| sample | raw | V1 normalized | V2 normalized | line breaks V1 → V2 | V2 time |
+|---|---|---|---|---|---|
+| plain text, 17k | 18,473 | 18,003 | 18,003 | 69 → 69 | ~10 ms |
+| plain text, 86k | 86,434 | 83,528 | 83,528 | 195 → 195 | ~50 ms |
+| PDF layout, 17k | 18,431 | 16,349* | 17,187 | 174 → 88 | ~15 ms |
+| PDF layout, 53k | 52,984 | 46,153* | 49,432 | 409 → 175 | ~40 ms |
+| PDF layout, 110k | 109,853 | 91,021* | 102,827 | 799 → 333 | ~90 ms |
+
+"PDF layout" = hard-wrapped at ~78 chars, 3-line letterhead + rule + page
+counter on every page, TOC, tabs/NBSP, an OCR double line.
+
+\* V1's smaller numbers include **lost body text**: its spacing-based header
+rule deleted recurring wrapped body lines (≈4 % of the words in these
+samples). V2 removes only ballast (letterheads, footers, page counters, rule
+lines, TOC, the OCR double line): 17k sample ≈ −6.8 % characters, and every
+clause stays.
+
+Expected benefit on real contracts:
+
+- **Character reduction stays modest.** The real KONE text lost only about
+  2.3 % in V1 normalization, so most of it is content. TOC runs and
+  multi-line letterheads/footers are the main additional savings.
+- **Cleaner prompts.** Roughly half the line breaks go away in wrapped PDF
+  text, which means fewer tokens than the character estimate suggests.
+  Sentences that cross pages stay whole, so a clause lands in one block.
+- **The TOC no longer counts as a significant hit.** It used to match every
+  clause keyword and crowd the document head.
+- **Fewer silent losses.** Business values and body lines are no longer
+  dropped (see the V1 fixes in the linked doc).
+
+Not changed: planner thresholds, `target_chars`, prompt v1, models, Ollama
+settings. `optimized_chars` therefore stays in the same ~6-7k range at an
+8,192 window: the relevance selection still fills its target, so cleaner
+input means more relevant text per call, not a smaller call.
+
+### Observations for the next passes
+
+Contract prompt V2:
+
+- the excerpt markers (`[Excerpt 2/4]`) are the only non-document text in
+  `{text}`. V2 should explain them in a single sentence instead of the
+  model guessing;
+- normalized text keeps table column gaps as two spaces or `|`. A short
+  hint that two-space gaps separate table columns may help price/interval
+  extraction.
+
+Planner:
+
+- the planner fills `target_chars` regardless of how clean the input is.
+  To turn cleaner input into fewer **tokens**, the planner pass has to
+  decide on must-have vs. nice-to-have context (see below), not the
+  normalizer;
+- measure the line-break/token effect directly via Ollama
+  `prompt_eval_count`. The character-based estimate (3.2 chars/token)
+  cannot see it;
+- digit-initial continuations (`… beträgt`⏎`3 Monate`) are not joined and
+  can split a clause across two blocks. The small-neighbor rule usually
+  keeps them together; check that against real texts.
 
 ## Contract prompt V2
 

@@ -1026,7 +1026,11 @@ logging, Prompt Lab listing/load/draft-analyze/save+activate, and the
 real `OllamaClient` validation/repair/repair-failure/timeout/unavailable
 behavior against the real contract schema.
 
-Contract text optimization has two files: `tests/test_text_optimization.py`
+Contract text optimization has three files:
+`tests/test_text_normalization_v2.py` (Normalization V2 regressions: PDF
+line wraps, lists/tables/headings kept, hyphenation, headers/footers/page
+numbers/TOC, OCR duplicates, short business values, DE/EN, 100k linearity,
+and a "nothing invented or reordered" invariant), `tests/test_text_optimization.py`
 (normalization incl. header/footer/page-number/OCR-duplicate/hyphenation/
 table cases, DE/EN passage selection, head/tail/no-keyword behavior,
 direct/relevance/chunked thresholds on synthetic 3k-100k contracts, merge

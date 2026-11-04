@@ -59,25 +59,64 @@ same input handling).
   `[Excerpt 4/4 - end of document]`.
 - There is no AI summary step anywhere.
 
-## Phase A - normalization (`normalize.py`)
+## Phase A - normalization (`normalize.py`, V2)
 
-Conservative. When in doubt, a line stays.
+Purely technical cleanup. When in doubt, a line stays. If stronger
+cleanup conflicts with table integrity, table integrity wins.
 
 | Removed / changed | Kept on purpose |
 |---|---|
-| invisible chars (zero-width, soft hyphen), NBSP -> space | line structure, paragraphs, headings |
-| runs of 3+ spaces / tabs -> two spaces (column gap stays visible) | single/double spaces |
-| 3+ blank lines -> one paragraph break | |
-| explicit page numbers: `Seite 3`, `Seite 3 von 7`, `Page 2 of 9`, `3 von 7`, `- 3 -` | bare numbers (`24`) - may be table cells; only removed at a page edge when page breaks (`\f`) are known |
-| repeated headers/footers: short lines (8-120 chars) repeated on most pages at the page edge, or 3+ times at least 1,000 characters apart; the **first** occurrence is kept (letterhead, contract number) | adjacent identical lines (table rows), section headings at page tops (`§ 7 …`/`§ 8 …` only match digit-insensitively when the line has a page token) |
-| consecutive identical lines ≥ 30 chars (OCR double recognition) | short repeated cells (`monatlich`), identical table rows |
-| later exact copies of paragraphs ≥ 200 chars (content stays once) | shorter repeated sentences |
-| symbol-only noise (`-----`, `_ _ _`, `|||`), leader dots -> `...` | lines with `§ € $ % ☐ ☒ ✓` |
-| `Kündigungs-`⏎`frist` -> `Kündigungsfrist`; mid-sentence wraps joined | `Wartungs- und …`, `Service-Vertrag`, list items `a) …`, table rows, short labels |
+| invisible chars (zero-width, BOM, soft hyphen), C0/C1 control chars; NBSP, thin/ideographic and other Unicode spaces -> space; `\v`, NEL, U+2028/2029 -> line break; ligatures `ﬁ ﬂ ﬀ ﬃ ﬄ` -> letters | line structure, paragraphs, headings |
+| runs of 3+ spaces / tabs -> two spaces (column gap stays visible); leading/trailing spaces | single/double spaces |
+| blank and whitespace-only line runs -> one paragraph break | |
+| explicit page numbers: `Seite 3`, `Seite: 3`, `Seite 3 von 7`, `Seite 3/7`, `S. 3 von 7`, `Page 2 of 9`, `3 von 7`, `- 3 -`, `Blatt 2` | bare numbers (`24`, `4711`) and fractions (`3/7`) - at a page edge they are removed only if they **follow the page sequence** (number minus page index constant on ≥ half the pages) |
+| repeated headers/footers: short lines (8-120 chars) repeated on most pages at the page edge (page-number and rule lines don't take up edge slots; `… \| 4/17` counters match digit-insensitively), or 3+ times at least 1,000 characters apart; the **first** occurrence is kept (letterhead, contract number) | adjacent identical lines (table rows), section headings at page tops; short **business values** (amounts, `%`, dates, durations `3 Monate`/`30 Tage`, `§ 4`, `monatlich`/`jährlich`/…) are never header candidates; without page breaks, lines ending in `.!?;:,` or starting lowercase are not either (recurring clauses, wrapped sentence middles) |
+| table-of-contents runs: ≥ 3 numbered entries with dot leader and non-decreasing page number (`§ 4 Laufzeit ...... 5`), of which ≥ 2/3 of the titles reappear as heading lines in the body - the sections themselves stay | leader lists of values (`Laufzeit ..... 24`, `1. Laufzeit ... 12`), any run whose numbers decrease or whose titles are not headings elsewhere |
+| consecutive identical lines ≥ 30 chars, compared whitespace-insensitively (OCR double layer) | short repeated cells (`monatlich`), identical table rows |
+| a directly repeated prose paragraph (≥ 40 chars, all lines ≥ 30); later exact copies of paragraphs ≥ 200 chars | value-only paragraphs, table paragraphs, shorter repeats, **near-duplicates** (`12 Monate` vs `18 Monate` must both reach the model) |
+| symbol-only lines (`-----`, `_ _ _`, `\|\|\|`) - removed **without** merging their neighbors; leader dots/underscores (also `. . . .`) -> `...`; rule runs inside a line (`=======`) -> 3 chars | lines with `§ € $ £ % ☐ ☑ ☒ ✓ ✔ ✗ ✘ ■ □` |
+| hyphenation `Kündigungs-`⏎`frist` -> `Kündigungsfrist` (also Unicode hyphens) | `Wartungs- und`/`bis`/`sowie …`, `Service-`⏎`Vertrag`, `EU-`⏎`weit` |
+| PDF line wraps joined into running text: lowercase continuation; capitalized continuation (German nouns) only after a full-width line (≥ 55 chars) ending in a lowercase word, an article (`Der`) or a number before its unit (`24`⏎`Monaten`), and only if the next line is itself full-width or ends the sentence | table rows, list items (`a)`, `-`, `•`, `1.`), headings (`§`, numbered, ALL CAPS), field labels (`Vertragsnummer: …`), lines after a sentence end, short unmarked list items/addresses/names |
+| a sentence running across a page break is rejoined (same rules) | paragraph break at a page break otherwise; kept header/footer lines never join |
 
 Page breaks (form feeds) are used when present but never required:
 plain text without them works the same, it just uses the
 spacing-based header rule.
+
+Invariant (tested on every new normalization test): apart from collapsed
+whitespace, `...` for leaders and a removed hyphenation hyphen, every
+output character is an input character **in the original order**.
+Normalization never converts dates or amounts, never interprets
+abbreviations or parties, never summarizes or translates.
+
+### What V2 changed against V1 (2026-11-04)
+
+- New: Unicode space/line-separator/control/ligature cleanup; spaced
+  leaders; rule runs inside lines; TOC runs; capitalized PDF line wraps;
+  cross-page sentence joins; page-sequence check for bare edge numbers;
+  digit-insensitive `x/y` page counters at page edges; whitespace-
+  insensitive OCR duplicate lines; directly repeated prose paragraphs.
+- Fixed (V1 lost content):
+  - the spacing-based header rule deleted later copies of recurring body
+    lines, e.g. the wrapped middle of a boilerplate sentence, or
+    `31.12.2027`/`12 Monate`/`jährlich` on their own lines;
+  - a bare number at any of the first/last three lines of a page (e.g.
+    `4711`, `24` in a table at the page bottom) was removed;
+  - removing a rule line could merge the lines around it.
+- Linear again: join decisions only look at the last physical line, and
+  a long logical line is collected as parts, so the work no longer grows
+  with the size of the paragraph built so far (V1 did this for the
+  hyphenation check).
+- Unchanged on purpose: block segmentation, scoring, planner thresholds,
+  `target_chars`, budgets, prompt v1, schema, merge, all Ollama settings.
+- Deliberately not implemented: near-duplicate (fuzzy) removal. OCR
+  variants that differ by one value are exactly the contradictions the
+  prompt must see (`null` + note). Exact and whitespace-only duplicates
+  are safe, so only those are removed. Also not implemented: joining a
+  continuation that starts with a digit (`… beträgt`⏎`3 Monate`), because
+  it can't be told apart from a numbered heading (`3 Vergütung`). Exactly
+  two spaces in justified prose also stay, because they can't be told
+  apart from a two-column gap.
 
 ## Phase B - relevance selection (`passages.py`, `contract.py`)
 
@@ -276,6 +315,11 @@ The `docpipe.ai` log line carries `input_chars`, `strategy`,
 `ollama_duration_ms`, `total_duration_ms`. It never contains document
 text, passages, names, contract numbers, prompts or AI output.
 
+The effect of normalization is `raw_chars - normalized_chars` (log:
+`input_chars - normalized_chars`) together with `normalization_ms`.
+Normalization V2 adds no fields, because a derived reduction field would be
+redundant.
+
 ## Security
 
 - Document text stays untrusted data. The optimizer does not interpret it
@@ -303,6 +347,20 @@ text, passages, names, contract numbers, prompts or AI output.
   passages being selected.
 - `max_input_length` (80,000 characters raw) still applies; longer texts
   are rejected as before.
+- Normalization is heuristic:
+  - a capitalized line of at least 55 chars directly after a full-width
+    line ending in a lowercase word can be joined to it, e.g. an
+    unnumbered long heading after an unterminated sentence. The text
+    stays complete, only the line break is lost;
+  - in page mode, a short line repeated identically at the page edges of
+    at least half the pages counts as a header, and so does a repeated
+    table column header (only the first copy stays);
+  - without page breaks, a capitalized, unpunctuated line of 8-120 chars
+    that recurs 3+ times at least 1,000 chars apart is still taken for a
+    header.
+- Joining wrapped lines barely changes the character count (`\n` -> ` `).
+  Its gain is cleaner blocks and fewer line-break tokens, which the
+  character-based estimate does not show.
 
 ## Staging validation (real Ollama)
 
@@ -351,7 +409,8 @@ instead:
 
 - improve deterministic normalization (blank lines/PDF wraps/OCR artifacts,
   header/footer duplication, conservative near-duplicates) while preserving
-  tables and short business-significant lines;
+  tables and short business-significant lines - **done: Normalization V2,
+  see "Phase A" above** (near-duplicates deliberately not removed);
 - add a compact `contract_extraction` prompt v2 instead of overwriting v1;
 - prefer one call when all must-have significant passages fit the actual
   calculated context budget, using `target_chars` as a soft context target
