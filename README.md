@@ -112,6 +112,7 @@ docpipe/
 │  │  │  └─ schema.json
 │  │  ├─ contract_extraction/
 │  │  │  ├─ v1.txt
+│  │  │  ├─ v2.txt                 # default: v1 + excerpt/table/contradiction clarifications
 │  │  │  └─ schema.json
 │  │  └─ assistant/                # one subfolder per assistant mode, same v1.txt/active.json shape
 │  │     ├─ hotel_health_summary/v1.txt
@@ -612,7 +613,7 @@ versioned prompt template and response JSON Schema under
 |--------------------------|-------------------------|-------------------|
 | `maintenance_extraction` | `v1`                    | `vendor_name`, `service_type`, `performed_at`, `next_due_date`, `technician`, `result`, `cost`, `currency`, `notes` |
 | `inspection_extraction`  | `v1`                    | `inspection_type`, `inspection_date`, `next_due_date`, `vendor_name`, `inspector`, `result`, `defects_found`, `certificate_number`, `notes` |
-| `contract_extraction`    | `v1`                    | `vendor_name`, `contact_person`, `contract_type`, `contract_number`, `service_description`, `start_date`, `end_date`, `is_open_ended`, `notice_period`, `notice_period_value`, `notice_period_unit`, `renewal_terms`, `auto_renewal`, `renewal_period_value`, `renewal_period_unit`, `amount`, `currency`, `payment_interval`, `notes` |
+| `contract_extraction`    | `v2`                    | `vendor_name`, `contact_person`, `contract_type`, `contract_number`, `service_description`, `start_date`, `end_date`, `is_open_ended`, `notice_period`, `notice_period_value`, `notice_period_unit`, `renewal_terms`, `auto_renewal`, `renewal_period_value`, `renewal_period_unit`, `amount`, `currency`, `payment_interval`, `notes` |
 
 "Default" because the prompt *text* is no longer fixed at deploy time
 (V2.2): each mode's actually-active version is runtime-resolved on every
@@ -1025,6 +1026,13 @@ paths, rejection of client-supplied model/prompt fields, metadata-only
 logging, Prompt Lab listing/load/draft-analyze/save+activate, and the
 real `OllamaClient` validation/repair/repair-failure/timeout/unavailable
 behavior against the real contract schema.
+
+Contract prompt v2 and Ollama token telemetry are covered by
+`tests/test_contract_prompt_v2_token_metrics.py`. It checks the v2
+clarifications against v1, defensive reading of
+`prompt_eval_count`/`eval_count` (missing/partial/zero/invalid), run
+totals vs. per-call values for direct/chunked/repair/fallback runs, and the
+analyze diagnostics/log line.
 
 Contract text optimization has three files:
 `tests/test_text_normalization_v2.py` (Normalization V2 regressions: PDF

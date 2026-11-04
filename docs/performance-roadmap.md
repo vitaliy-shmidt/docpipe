@@ -175,10 +175,14 @@ the model**.
 Priority order:
 
 1. transient text normalization V2 (**done 2026-11-04**, see below);
-2. compact `contract_extraction` prompt V2;
-3. expose the already-read Ollama phase metrics in safe logs;
-4. improve relevance/chunking decisions against the real prompt/context
-   budget;
+2. `contract_extraction` prompt V2 (**done 2026-11-04** as a clarification
+   pass; the compact restructure is still open, see below);
+3. expose Ollama metrics in safe logs (**token counts done 2026-11-04**:
+   `prompt_eval_count`/`eval_count`; phase durations still only
+   per-call internally);
+4. **next / open - Planner V2:** split mandatory passages from additional
+   context and decide against the real prompt/context budget, using the
+   new token counts;
 5. reduce caller-supplied assistant context/history;
 6. only after those measurements revisit model/hardware tuning.
 
@@ -314,6 +318,27 @@ handling.
 Do not overwrite v1. Add v2 and compare both through Prompt Lab against the
 same real contracts before activation.
 
+### Status (2026-11-04): v2 = clarification pass, compaction still open
+
+The shipped `v2` is deliberately **not** the compact restructure above. It
+is v1 plus three clarifications that match what the optimizer actually
+sends:
+
+- `[Excerpt n/m]` blocks are parts of the same contract;
+- several spaces or `|` may separate table columns;
+- contradictions across excerpts are not reconciled.
+
+Details are in [contract-text-optimization.md, "Prompt v2"](contract-text-optimization.md#prompt-v2).
+
+- **Default:** `v2` is the default. The diff to v1 is two additive lines,
+  and rollback is one Prompt Lab activation of `v1`. The real-contract
+  v1/v2 comparison is still to be done on staging.
+- **Cost:** +333 chars (~100 tokens) per call. At an 8,192 window this has
+  no planner effect. At 4,096 the per-call text budget drops ~10 %.
+- **Still open, as a future `v3`:** the redundancy reduction / ROLE-RULES
+  structure above. It should be judged by `prompt_eval_count` and field
+  quality, not by characters.
+
 ## Planner / chunking follow-up
 
 The KONE case shows that a large document can contain >13k relevant
@@ -363,6 +388,35 @@ This allows the next decision to be evidence-based:
 - high prompt-eval time -> reduce prompt/input;
 - high eval time -> reduce output/schema work;
 - both high -> remaining bottleneck is mainly model/hardware.
+
+### Status (2026-11-04): token counts implemented
+
+- `OllamaClient` now also reads `prompt_eval_count`, i.e. the prompt tokens
+  Ollama actually evaluated. Prefixes reused from Ollama's prompt cache are
+  not counted.
+- The contract diagnostics carry `prompt_eval_count_total` /
+  `eval_count_total` (exact or `null`) and a per-call `calls[]` list. The
+  analyze log line carries `prompt_eval_count` / `eval_count`.
+- Semantics and the null rules are in
+  [contract-text-optimization.md, "Ollama token telemetry"](contract-text-optimization.md#ollama-token-telemetry).
+- No extra call and no local tokenizer.
+
+Not yet measured: no Ollama was reachable in the development environment,
+so the real numbers for the regression set (~17k, ~78k, short contract)
+need a staging run (contract-text-optimization.md "Staging validation",
+step 10). Fill in this table there:
+
+| contract | raw_chars | normalized_chars | optimized_chars | ai_calls | prompt_eval_count | eval_count |
+|---|---|---|---|---|---|---|
+| ~17k | | | | | | |
+| ~78k (KONE) | | | | | | |
+| short (direct) | | | | | | |
+
+These numbers answer the question for Planner V2: how many real prompt
+tokens does `optimized_chars` become, and does a character reduction
+translate into a token reduction? The phase durations
+(`prompt_eval_ms`/`eval_ms`/`load_ms`) are read per call but not yet in
+the log line.
 
 ## Assistant caller guidance
 
