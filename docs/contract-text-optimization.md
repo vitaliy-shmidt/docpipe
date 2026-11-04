@@ -331,3 +331,36 @@ text, passages, names, contract numbers, prompts or AI output.
    and unchanged results.
 9. DocLab (`/lab/analyze`) shows the same `text_optimization` object for
    draft prompt tests.
+
+
+## Next optimization pass (2026-11-04)
+
+Real CPU-only staging measurements after this implementation are documented in
+[performance-roadmap.md](performance-roadmap.md). Two findings change the next
+step:
+
+1. raising the contract profile to an 8,192-token context window turned a real
+   ~17k-character contract from 3 chunks into one relevance call and reduced
+   total time from up to ~98 s to ~65 s;
+2. lowering `target_chars` to 5,500 was counterproductive: significant
+   passages no longer fit the soft single-call target, so the planner returned
+   to 3 chunks and ~107 s.
+
+Therefore the next pass must **not** blindly shrink `target_chars`. It should
+instead:
+
+- improve deterministic normalization (blank lines/PDF wraps/OCR artifacts,
+  header/footer duplication, conservative near-duplicates) while preserving
+  tables and short business-significant lines;
+- add a compact `contract_extraction` prompt v2 instead of overwriting v1;
+- prefer one call when all must-have significant passages fit the actual
+  calculated context budget, using `target_chars` as a soft context target
+  rather than an unconditional chunking trigger;
+- expose Ollama phase metrics already read by the client
+  (`prompt_eval_duration`, `eval_duration`, `eval_count`, load time) in
+  metadata-only logs so prompt/input vs. output cost can be measured directly;
+- investigate group-specific response schemas only if true chunking remains
+  necessary.
+
+The persisted/request source text contract is unchanged: no normalization v2
+may mutate or replace the consumer's `extracted_text`.
