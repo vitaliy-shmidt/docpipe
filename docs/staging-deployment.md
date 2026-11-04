@@ -378,3 +378,23 @@ call returning `200` before assuming an OCR-specific problem. This is a
 Stirling-side data issue, not anything DocPipe's code does differently
 per key - worth checking first if *any* Stirling-backed call (not just
 OCR) starts failing after a key rotation.
+
+
+## Current 15 GiB CPU-only staging findings (2026-11-04)
+
+A newer HubDix staging deployment is now running on a CPU-only Ubuntu host with
+roughly 15 GiB RAM and 8 vCPU. Its measured model split, real contract/assistant
+latencies, the 8,192-context result, the failed `target_chars=5500`
+experiment, and the next optimization direction are tracked in
+[performance-roadmap.md](performance-roadmap.md).
+
+Important deployment conclusion: keep the current Ollama/model setup stable for
+the next pass and optimize the content sent to the model first. In particular,
+the real ~78k-character KONE contract showed that Stirling embedded-text
+extraction (~1.2 s) is negligible compared with CPU inference (~83-112 s for
+three contract-extraction calls).
+
+This newer deployment supersedes the older 8 GiB staging box as the primary
+performance reference. The older measurements in this guide remain useful as
+historical context and for understanding why keep-alive and timeout tuning were
+introduced.
