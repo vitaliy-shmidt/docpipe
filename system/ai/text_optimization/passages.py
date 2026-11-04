@@ -63,6 +63,10 @@ class Selection:
     passage_count: int
     hit_blocks: int
     included_hits: int
+    # Block characters per tier (without excerpt markers / separators of
+    # the rendering) - Planner V2 diagnostics.
+    mandatory_chars: int = 0
+    supporting_chars: int = 0
 
     @property
     def complete(self) -> bool:
@@ -190,42 +194,63 @@ def select(
     *,
     head_chars: int,
     tail_chars: int,
+    soft_budget: int | None = None,
+    supporting_chars: int | None = None,
 ) -> Selection:
-    """Greedy, budget-bounded selection of verbatim blocks, in priority order:
+    """Greedy selection of verbatim blocks in two tiers (Planner V2).
 
+    `budget` is the HARD limit (the real per-call budget) - never exceeded.
+    `soft_budget` (default: `budget`) only bounds supporting context, and
+    `supporting_chars` (default: no cap) additionally caps how much
+    supporting context is added on top of the mandatory passages - free
+    room is not filled just because it is there.
+
+    Mandatory (within the hard budget, in this order):
     1. document head (master data: parties, number, subject);
     2. significant hits (at least one strong pattern), best first,
        interleaved across groups so no group starves the others - each with
-       its small neighbors (heading, lead-in/follow-up sentence);
-    3. document tail (signatures, annexes, late special terms);
-    4. weak-only hits, same way;
-    5. larger neighbors of significant hits, as extra context;
-    6. only if there was no hit at all: evenly spaced blocks, a conservative
-       sample instead of trusting keywords 100%.
+       its small neighbors (heading, lead-in/follow-up sentence) and any
+       block it continues into/from mid-sentence ("... beträgt" + "3 Monate
+       ...", split by segmentation);
+    3. per group, its best weak-only hit (some fields only ever have weak
+       evidence, e.g. the payment interval) - one block per group at most.
+
+    Supporting:
+    4. document tail (signatures, annexes) - safety net, within the hard
+       budget;
+    5. other weak hits, then larger neighbors of significant hits - within
+       the soft budget and the supporting cap;
+    6. only if there was no hit at all: evenly spaced blocks up to the soft
+       budget (no cap), a conservative sample instead of trusting keywords.
 
     `hit_blocks`/`included_hits` count significant hits only - that is what
-    decides whether the selection is complete.
+    decides whether the selection is complete (otherwise the planner
+    chunks).
     """
     if not blocks:
         return Selection(text="", passage_count=0, hit_blocks=0, included_hits=0)
 
+    soft = budget if soft_budget is None else min(soft_budget, budget)
     chosen: set[int] = set()
     order: list[int] = []
+    mandatory: set[int] = set()
     used = 0
 
     def size(index: int) -> int:
         start, end = blocks[index]
         return end - start + 2
 
-    def try_add(indices: list[int]) -> bool:
+    def try_add(indices: list[int], limit: int = budget, *, required: bool = False) -> bool:
         nonlocal used
-        new = [i for i in indices if i not in chosen]
+        new = [i for i in dict.fromkeys(indices) if i not in chosen]
         cost = sum(size(i) for i in new)
-        if used + cost > budget:
+        if used + cost > limit:
             return False
         for i in new:
             chosen.add(i)
             order.append(i)
+            if required:
+                mandatory.add(i)
         used += cost
         return True
 
@@ -236,15 +261,26 @@ def select(
             if 0 <= i < len(blocks) and (size(i) <= _SMALL_NEIGHBOR_CHARS) == small
         ]
 
-    def add_hits(cores: list[int]) -> None:
+    def continuation(core: int) -> list[int]:
+        # Blocks of the same paragraph split mid-sentence belong together.
+        result = []
+        if core > 0 and _continues(text, blocks, core - 1):
+            result.append(core - 1)
+        if core + 1 < len(blocks) and _continues(text, blocks, core):
+            result.append(core + 1)
+        return result
+
+    def add_hits(cores: list[int], limit: int, *, required: bool) -> None:
         for core in cores:
-            if not try_add([core] + neighbors(core, small=True)):
-                try_add([core])
+            linked = [core, *continuation(core)]
+            if not try_add(linked + neighbors(core, small=True), limit, required=required):
+                if not try_add(linked, limit, required=required):
+                    try_add([core], limit, required=required)
 
     head_total = 0
     head_count = 0
     for index in range(len(blocks)):
-        if head_total >= head_chars or not try_add([index]):
+        if head_total >= head_chars or not try_add([index], required=True):
             break
         head_total += size(index)
         head_count += 1
@@ -252,7 +288,13 @@ def select(
     hits = _interleaved_hits(scores, group_names)
     significant = [i for i in hits if max(scores[i].get(name, 0) for name in group_names) >= STRONG_WEIGHT]
     significant_set = set(significant)
-    add_hits(significant)
+    add_hits(significant, budget, required=True)
+    promoted = _best_weak_only_hits(scores, group_names)
+    add_hits(promoted, budget, required=True)
+
+    supporting_limit = soft
+    if supporting_chars is not None:
+        supporting_limit = min(supporting_limit, used + supporting_chars)
 
     tail_total = 0
     for index in range(len(blocks) - 1, -1, -1):
@@ -262,29 +304,57 @@ def select(
             break
         tail_total += size(index)
 
-    add_hits([i for i in hits if i not in significant_set])
+    add_hits([i for i in hits if i not in significant_set], supporting_limit, required=False)
     for core in significant:
         if core in chosen:
             for neighbor in neighbors(core, small=False):
-                try_add([neighbor])
+                try_add([neighbor], supporting_limit)
 
     if not hits:
-        _add_even_sample(len(blocks), try_add)
+        _add_even_sample(len(blocks), lambda indices: try_add(indices, soft))
 
     rendered = render(text, blocks, chosen)
     # Excerpt markers are added after selection - if they push the result
-    # over budget, give back the most recently added (lowest-priority)
-    # blocks, never the document head.
+    # over the hard budget, give back the most recently added (lowest-
+    # priority: supporting first) blocks, never the document head.
     while len(rendered) > budget and len(order) > head_count:
         chosen.discard(order.pop())
         rendered = render(text, blocks, chosen)
 
+    mandatory_chars = sum(size(i) for i in chosen if i in mandatory)
     return Selection(
         text=rendered,
         passage_count=_run_count(chosen),
         hit_blocks=len(significant),
         included_hits=sum(1 for core in significant if core in chosen),
+        mandatory_chars=mandatory_chars,
+        supporting_chars=sum(size(i) for i in chosen) - mandatory_chars,
     )
+
+
+def _continues(text: str, blocks: list[tuple[int, int]], index: int) -> bool:
+    """Block `index` and the next one are one paragraph cut mid-sentence
+    (no blank line between them, no sentence end at the cut)."""
+    end, next_start = blocks[index][1], blocks[index + 1][0]
+    return "\n\n" not in text[end:next_start] and text[end - 1] not in ".;:!?"
+
+
+def _best_weak_only_hits(scores: list[dict[str, int]], group_names: tuple[str, ...]) -> list[int]:
+    """Per group, the block with the most weak matches among blocks without
+    a strong one (earliest on ties). Some fields only ever have weak
+    evidence (payment interval: "monatlich", "quartalsweise", "Rechnung";
+    a bare start date), so each group's best such block is mandatory -
+    at most one block per group, linear in the number of blocks."""
+    result = []
+    for name in group_names:
+        best, best_score = None, 0
+        for i, score in enumerate(scores):
+            value = score.get(name, 0)
+            if 0 < value < STRONG_WEIGHT and value > best_score:
+                best, best_score = i, value
+        if best is not None:
+            result.append(best)
+    return result
 
 
 def _interleaved_hits(scores: list[dict[str, int]], group_names: tuple[str, ...]) -> list[int]:

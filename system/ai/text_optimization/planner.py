@@ -3,13 +3,17 @@
     raw text -> normalize -> direct | relevance | chunked
 
 - direct:    normalized text fits the direct limit -> complete text, 1 call
-- relevance: verbatim relevant passages (+ head/tail) fit the target -> 1 call
+- relevance: all MANDATORY passages (head + significant hits, see
+             passages.select) fit the real per-call budget -> 1 call
 - chunked:   they don't -> one call per field group, each only with that
              group's passages (2-3 calls, never the full text per chunk)
 
-Every limit is additionally capped by the per-call token budget derived from
-the model's context window and the measured prompt overhead, so the text
-slot can never fill the whole window.
+Planner V2 (docs/contract-text-optimization.md "Planner V2"): the per-call
+budget derived from the model's context window and the measured prompt
+overhead is the HARD limit and the only thing that decides between one call
+and chunking. `target_chars` / `chunk_target_chars` are SOFT limits for
+supporting context only, which is further capped by
+`supporting_context_chars` - free room is not filled just because it exists.
 """
 
 from __future__ import annotations
@@ -85,6 +89,7 @@ def plan_input(
 
     direct_limit = min(settings.direct_limit_chars, budget_chars)
     dropped = 0
+    selections = []
     if len(normalized) <= direct_limit:
         strategy = STRATEGY_DIRECT
         calls = [PlannedCall("document", normalized, None, 1 if normalized else 0)]
@@ -92,16 +97,18 @@ def plan_input(
         blocks = segment_blocks(normalized)
         scores = score_blocks(normalized, blocks, groups)
         all_names = tuple(group.name for group in groups)
-        target = min(settings.target_chars, budget_chars)
         selection = select(
             normalized,
             blocks,
             scores,
             all_names,
-            target,
+            budget_chars,
             head_chars=settings.head_chars,
             tail_chars=settings.tail_chars,
+            soft_budget=settings.target_chars,
+            supporting_chars=settings.supporting_context_chars,
         )
+        selections = [selection]
         if selection.complete or not settings.chunking_enabled:
             strategy = STRATEGY_RELEVANCE
             calls = [PlannedCall("document", selection.text, None, selection.passage_count)]
@@ -109,7 +116,7 @@ def plan_input(
         else:
             strategy = STRATEGY_CHUNKED
             calls = []
-            chunk_budget = min(settings.chunk_target_chars, budget_chars)
+            selections = []
             for group in groups:
                 if not group.carries_head and not any(score[group.name] for score in scores):
                     continue  # nothing about this topic anywhere - no call
@@ -118,10 +125,13 @@ def plan_input(
                     blocks,
                     scores,
                     (group.name,),
-                    chunk_budget,
+                    budget_chars,
                     head_chars=settings.head_chars if group.carries_head else 0,
                     tail_chars=settings.tail_chars if group.carries_head else 0,
+                    soft_budget=settings.chunk_target_chars,
+                    supporting_chars=settings.supporting_context_chars,
                 )
+                selections.append(group_selection)
                 dropped += group_selection.hit_blocks - group_selection.included_hits
                 calls.append(
                     PlannedCall(group.name, group_selection.text, group.fields, group_selection.passage_count)
@@ -139,6 +149,10 @@ def plan_input(
         # a cut through the middle of a passage.
         "dropped_passages": dropped,
         "call_budget_chars": budget_chars,
+        # Planner V2 tiers (block chars, summed over calls; direct: all
+        # mandatory - the complete text).
+        "mandatory_chars": sum(s.mandatory_chars for s in selections) if selections else len(normalized),
+        "supporting_chars": sum(s.supporting_chars for s in selections),
         "normalization_ms": round((normalized_at - started_at) * 1000, 1),
         "optimization_ms": round((finished_at - normalized_at) * 1000, 1),
     }

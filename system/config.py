@@ -282,10 +282,13 @@ _TEXT_OPTIMIZATION_INT_KEYS = (
     "direct_limit_chars",
     "target_chars",
     "chunk_target_chars",
+    "supporting_context_chars",
     "head_chars",
     "tail_chars",
     "assumed_context_window_tokens",
 )
+# 0 is a meaningful value here (no head/tail/supporting context).
+_TEXT_OPTIMIZATION_ZERO_OK_KEYS = ("head_chars", "tail_chars", "supporting_context_chars")
 _TEXT_OPTIMIZATION_BOOL_KEYS = ("enabled", "chunking_enabled", "timeout_fallback_enabled")
 _TEXT_OPTIMIZATION_KEYS = {
     *_TEXT_OPTIMIZATION_INT_KEYS,
@@ -325,7 +328,7 @@ def _parse_text_optimization(raw: object) -> dict[str, TextOptimizationSettings]
                     values[key] = int(raw_mode[key])
                 except (TypeError, ValueError) as exc:
                     raise ConfigError(f"text_optimization.{mode_name}.{key} must be an integer.") from exc
-                if values[key] < 0 or (values[key] == 0 and key not in ("head_chars", "tail_chars")):
+                if values[key] < 0 or (values[key] == 0 and key not in _TEXT_OPTIMIZATION_ZERO_OK_KEYS):
                     raise ConfigError(f"text_optimization.{mode_name}.{key} must be positive.")
         prefix = f"text_optimization.{mode_name}"
         if "primary_timeout_ratio" in raw_mode:

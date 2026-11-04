@@ -24,13 +24,20 @@ class TextOptimizationSettings:
     # Normalized text up to this size goes to the model complete (strategy
     # "direct") - a small contract is never reduced.
     direct_limit_chars: int = 8000
-    # Above direct_limit: relevant passages are selected up to this size for
-    # a single call (strategy "relevance").
+    # Above direct_limit (Planner V2): mandatory passages (head + significant
+    # hits) go into ONE call whenever they fit the real per-call budget
+    # (strategy "relevance"). target_chars is only the SOFT limit for
+    # supporting context around them - not a fill target, not a chunking
+    # trigger.
     target_chars: int = 7000
-    # If the relevant passages do not fit target_chars, one call per field
-    # group (strategy "chunked"), each with at most this many characters.
+    # If the mandatory passages do not fit one call, one call per field
+    # group (strategy "chunked"); chunk_target_chars is each chunk's soft
+    # limit for supporting context.
     chunking_enabled: bool = True
     chunk_target_chars: int = 4500
+    # Supporting context (weak hits, larger neighbors) added on top of the
+    # mandatory passages per call, at most - within the soft limits above.
+    supporting_context_chars: int = 1500
     # Always-kept document start (parties, number, subject) and, budget
     # permitting, end (signatures, annexes).
     head_chars: int = 1500

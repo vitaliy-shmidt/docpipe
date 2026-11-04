@@ -126,9 +126,10 @@ text_optimization:
   contract_extraction:
     enabled: true
     direct_limit_chars: 8000      # complete normalized text up to this size
-    target_chars: 7000            # relevant passages for one call
+    target_chars: 7000            # soft limit for supporting context (one call while mandatory passages fit the real budget)
     chunking_enabled: true        # else one call per field group (basis/term/finance)
     chunk_target_chars: 4500
+    supporting_context_chars: 1500   # Planner V2: extra context per call on top of mandatory passages
     head_chars: 1500              # always-kept document start
     tail_chars: 600               # document end, if budget allows
     timeout_fallback_enabled: true
