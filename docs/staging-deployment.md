@@ -253,6 +253,7 @@ treating the slower response as a problem on its own.
 [ ] contract_extraction mit 2-3 echten Verträgen: Laufzeit unter standard.timeout_seconds, keine erfundenen Daten/Fristen (null bei Unklarheit)
 [ ] langer OCR-Vertrag (15-20k Zeichen): Log zeigt strategy=relevance/chunked, optimized_chars deutlich < input_chars, kein ai_timeout, Kündigung/Verlängerung/Preis korrekt (docs/contract-text-optimization.md "Staging validation")
 [ ] kurzer Vertrag: strategy=direct
+[ ] Planner V2: kurzer / ~17k / ~78k-Vertrag gegen die Baseline gemessen (prompt_eval_count_total, ai_calls, Felder nicht schlechter) - docs/contract-text-optimization.md "Staging validation" Schritt 11
 [ ] optional context_window_tokens am standard-Profil gesetzt und per `ollama ps` geprüft (kein Reload zwischen Warm-up und Analyse)
 [ ] Logs enthalten keine Dokumentinhalte
 [ ] Logs enthalten Timing-Metadaten (ollama_duration_ms/total_duration_ms) ohne Inhalte

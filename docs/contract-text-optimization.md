@@ -140,24 +140,65 @@ abbreviations or parties, never summarizes or translates.
    - weak patterns are words contracts use everywhere (`Auftragnehmer`,
      `Leistungen`, `monatlich`, `per month`, bare dates in all common
      formats, …). They only rank blocks.
-4. **Selection** (greedy, budget-bounded, in priority order):
-   document head (~1,500 chars: parties, number, subject) → significant
-   blocks with their short neighbors (heading, lead-in, follow-up
-   sentence), interleaved across groups → document tail (~600 chars:
-   signatures, annexes) → weak-only hits → larger neighbors as context →
-   if there is no keyword hit at all, evenly spaced blocks (a
-   conservative sample, never 100 % keyword dependence).
+4. **Selection (Planner V2)**: greedy, in two tiers (details below):
+   mandatory passages first, within the **hard** per-call budget; then a
+   capped amount of supporting context, within the **soft** target.
 5. Contiguous blocks are re-sliced from the original text as one excerpt
    (exact separators). Overlaps merge naturally, nothing appears twice, and
-   tables stay intact because a table is one block.
+   tables stay intact because a table is one block. Excerpts always keep
+   document order.
+
+### Planner V2 - mandatory vs. supporting (2026-11-04)
+
+V1 filled every call up to `target_chars`. In real contracts most of that
+filler was weak-hit prose (`Auftragnehmer`, `Leistungen` …) and large
+neighbor paragraphs. It also let `target_chars` decide about chunking:
+lowering it to 5,500 turned a 1-call contract into 3 chunks on staging.
+
+**Mandatory** passages always go in, within the hard budget:
+
+1. the document head (`head_chars`, ~1,500: parties, number, subject). The
+   provider name is often stated there without any keyword;
+2. every significant block (at least one strong pattern), interleaved
+   across groups, together with:
+   - its small neighbors (≤ 500 chars: heading, lead-in, follow-up
+     sentence);
+   - any block of the same paragraph it continues into or from
+     mid-sentence (`… beträgt` + `3 Monate …` split by segmentation).
+     Normalization V2 deliberately does not join digit-initial
+     continuations; this keeps them together anyway;
+3. per field group, its best **weak-only** block, at most one per group.
+   Some fields only ever have weak evidence: the payment interval
+   (`quartalsweise`, `Rechnung`), a bare date.
+
+**Supporting** context is added only on top:
+
+4. the document tail (`tail_chars`, ~600: signatures, annexes) as a safety
+   net, within the hard budget;
+5. other weak hits, then larger neighbors of significant blocks. They must
+   fit `target_chars` (soft) **and** may add at most
+   `supporting_context_chars` (default 1,500) per call. Free room is not
+   filled just because it exists;
+6. no keyword hit at all: evenly spaced blocks up to `target_chars`, the
+   unchanged safe fallback, which may use more context than 5.
+
+| Limit | Role |
+|---|---|
+| per-call budget (context window − prompt − output reserve − margin) | **hard**: never exceeded, the only input to the one-call vs. chunked decision |
+| `target_chars` / `chunk_target_chars` | **soft**: upper bound for supporting context only, not a fill target, not a chunking trigger |
+| `supporting_context_chars` | cap on supporting context per call |
+
+The planner stays deterministic (text, scores, groups, config, budget).
+It never reacts to Ollama telemetry, and it is linear in the number of
+blocks (no search, no embeddings, no LLM).
 
 ## Strategies and thresholds
 
 | Strategy | When | AI calls |
 |---|---|---|
 | `direct` | normalized text ≤ `direct_limit_chars` (capped by the call budget) | 1, complete normalized text |
-| `relevance` | otherwise, if all significant blocks fit `target_chars` (capped by the call budget) | 1 |
-| `chunked` | significant blocks do not fit one call | one per field group with relevant passages, so 1-3 (`basis` always) |
+| `relevance` | otherwise, if all **mandatory** passages (head + significant blocks) fit the **hard** per-call budget, even above `target_chars` | 1 |
+| `chunked` | the significant blocks do not fit one call's hard budget | one per field group with relevant passages, so 1-3 (`basis` always); each chunk again mandatory-first within the hard budget, supporting within `chunk_target_chars` |
 
 A small contract is never reduced. A text is never cut through the
 middle of a passage; blind truncation (`text[:N]`) does not exist. If
@@ -214,6 +255,23 @@ All relevant clauses (number, vendor, scope, price table, start date,
 renewal in the middle, notice period at the end) are kept in every row.
 `chunked` occurs when a contract has more distinct significant clauses
 than one call can hold (many price/notice/renewal sections).
+
+The table above is the V1 planner. The same kind of synthetic samples
+with prompt v2 at the 8,192 window, V1 → V2 (`optimized_chars`,
+strategy/calls):
+
+| sample | normalized | V1 planner | V2 planner (mandatory + supporting) |
+|---|---|---|---|
+| short (3k) | 3,240 | direct, 3,240 | direct, 3,240 (unchanged) |
+| 17k dense prose | 17,888 | relevance, 6,362 | relevance, 3,038 (2,115 + 845) |
+| 17k PDF layout | 17,187 | relevance, 6,910 | relevance, 3,660 (2,084 + 1,471) |
+| 78k PDF layout | 80,507 | relevance, 6,964 | relevance, 3,278 (1,797 + 1,404) |
+| 13k, 6 extra price/notice clause pairs | 13,131 | relevance, 6,731 | relevance, 4,822 |
+| 42k, 25 extra price/notice clause pairs | 41,615 | **chunked, 3 calls, 12,099**, 17 significant passages dropped (renewal + notice clause lost) | **relevance, 1 call, 9,227**, nothing dropped |
+
+At the 4,096 window the planner mostly cannot shrink anything further:
+mandatory passages already fill the ~3,000-char budget. The 25-clause
+sample stays chunked there.
 
 ## Chunked extraction
 
@@ -279,6 +337,7 @@ text_optimization:                # optional, these are the defaults
     target_chars: 7000
     chunking_enabled: true
     chunk_target_chars: 4500
+    supporting_context_chars: 1500   # Planner V2: supporting context cap per call (0 = none)
     head_chars: 1500
     tail_chars: 600
     timeout_fallback_enabled: true
@@ -288,6 +347,9 @@ text_optimization:                # optional, these are the defaults
 
 - Omit `text_optimization` entirely: contract optimization is **on** with
   the values above. `enabled: false` restores the old single raw-text call.
+- `supporting_context_chars` is the main Planner V2 tuning knob. If staging
+  shows a field regression, raise it (e.g. 3000) before anything else. It
+  never changes the one-call vs. chunked decision.
 - Only `contract_extraction` is accepted (other modes fail startup).
   `maintenance_extraction`/`inspection_extraction` are unchanged.
 - Unknown keys, non-positive sizes, a ratio outside 0.2-1.0, or a window
@@ -312,7 +374,8 @@ named keys only). Example values:
 "text_optimization": {
   "raw_chars": 17763, "normalized_chars": 17250, "optimized_chars": 6820,
   "strategy": "relevance", "passage_count": 3, "chunk_count": 0,
-  "dropped_passages": 0, "call_budget_chars": 15100,
+  "dropped_passages": 0, "call_budget_chars": 14799,
+  "mandatory_chars": 2084, "supporting_chars": 1471,
   "context_window_tokens": 8192, "estimated_prompt_tokens": 4290,
   "ai_calls": 1, "fallback_used": false, "merge_conflicts": 0,
   "normalization_ms": 4.1, "optimization_ms": 3.2, "ai_ms": 41250.0,
@@ -335,6 +398,12 @@ The effect of normalization is `raw_chars - normalized_chars` (log:
 `input_chars - normalized_chars`) together with `normalization_ms`.
 Normalization V2 adds no fields, because a derived reduction field would be
 redundant.
+
+`mandatory_chars` / `supporting_chars` (Planner V2) are the block
+characters per tier, summed over all calls of the run. They exclude
+excerpt markers, so together they are slightly less than
+`optimized_chars`. For `direct` all text counts as mandatory. They are only
+in the response diagnostics, not in the log line.
 
 ### Ollama token telemetry
 
@@ -490,6 +559,33 @@ deploy: the content must contain `[Excerpt n/m]`.
     Ollama's prompt cache. Compare first runs (or runs after a model
     reload) with each other. For a v1/v2 comparison, activate `v1` in the
     Lab, analyze, then activate `v2` again.
+11. **Planner V2 validation.** Use the same three contracts as the
+    baseline. Analyze each once; a second run is not needed for tokens,
+    since `prompt_eval_count` was identical in both baseline runs. Record:
+
+    | contract | input | normalized | optimized | strategy | ai_calls | prompt_eval_count_total | eval_count_total | repair | fallback | total_duration_ms |
+    |---|---|---|---|---|---|---|---|---|---|---|
+    | short - baseline | | | | direct | 1 | | | | | |
+    | short - Planner V2 | | | | | | | | | | |
+    | ~17k - baseline | 17,168 | 16,482 | 6,952 | relevance | 1 | 3,853 | 284 / 213 | no | no | ~68,149 cold / ~13,214 warm |
+    | ~17k - Planner V2 | | | | | | | | | | |
+    | ~78k KONE - baseline | 78,686 | 76,880 | 13,361 | chunked (3) | 3 | 9,050 | 1,153 / 1,331 | no | no | ~119,384 / ~75,344 |
+    | ~78k KONE - Planner V2 | | | | | | | | | | |
+
+    Then compare the fields manually against the baseline drafts:
+    provider, contract number, subject, begin/end, term, notice, renewal,
+    amount, currency, payment interval, notes.
+
+    **Gate:** Planner V2 counts as better only if no field is worse.
+    Fewer tokens or calls with a lost notice/renewal/price clause is a
+    regression. If one occurs:
+    - first raise `supporting_context_chars` (e.g. 3000) and restart, then
+      re-measure;
+    - only then look at `head_chars`/`tail_chars`.
+
+    Compare the KONE contract's `contract_number` specifically. The
+    baseline wrongly reported the contract title there (see
+    performance-roadmap.md).
 
 
 ## Next optimization pass (2026-11-04)
@@ -516,11 +612,10 @@ instead:
   **done: clarification-only v2 (excerpts, table gaps, contradictions
   across excerpts), see "Prompt v2"**. Shortening the prompt itself is
   still open: v2 is slightly *longer* than v1;
-- **open (Planner V2):** prefer one call when all must-have significant
-  passages fit the actual calculated context budget. Tell mandatory
-  passages apart from additional context, so that cleaner input actually
-  leads to fewer prompt tokens instead of filling `target_chars` with more
-  context;
+- prefer one call when all must-have significant passages fit the actual
+  calculated context budget, and tell mandatory passages apart from
+  additional context - **done: Planner V2, see "Planner V2 - mandatory vs.
+  supporting"**. Staging validation (step 11) is still open;
 - expose Ollama metrics in metadata-only logs - **done for token counts**
   (`prompt_eval_count`/`eval_count`, run totals + per call, see "Ollama
   token telemetry"). The phase durations (`prompt_eval_ms`/`eval_ms`) are

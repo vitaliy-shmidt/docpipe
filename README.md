@@ -1027,6 +1027,12 @@ logging, Prompt Lab listing/load/draft-analyze/save+activate, and the
 real `OllamaClient` validation/repair/repair-failure/timeout/unavailable
 behavior against the real contract schema.
 
+Planner V2 (mandatory vs. supporting passages, one call within the hard
+budget, chunking only when mandatory passages don't fit, safe no-keyword
+fallback, digit-initial continuations, contract-number regression,
+real-client relevance/chunked/repair/fallback runs) is covered by
+`tests/test_planner_v2.py`.
+
 Contract prompt v2 and Ollama token telemetry are covered by
 `tests/test_contract_prompt_v2_token_metrics.py`. It checks the v2
 clarifications against v1, defensive reading of

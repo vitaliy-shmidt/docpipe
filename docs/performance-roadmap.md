@@ -180,9 +180,9 @@ Priority order:
 3. expose Ollama metrics in safe logs (**token counts done 2026-11-04**:
    `prompt_eval_count`/`eval_count`; phase durations still only
    per-call internally);
-4. **next / open - Planner V2:** split mandatory passages from additional
-   context and decide against the real prompt/context budget, using the
-   new token counts;
+4. Planner V2 - split mandatory passages from additional context and decide
+   against the real prompt/context budget (**implemented 2026-11-04**;
+   staging validation against the baseline below still open);
 5. reduce caller-supplied assistant context/history;
 6. only after those measurements revisit model/hardware tuning.
 
@@ -369,6 +369,72 @@ Today every chunk asks for the full contract response schema and the merge
 later discards fields outside that chunk's group. A smaller per-group output
 could reduce generation work on CPU, but it must be validated carefully
 against current merge/conflict guarantees.
+
+### Real staging baseline before Planner V2 (prompt v2, `heavy`, 8,192)
+
+Measured on the HubDix staging host with `qwen2.5:1.5b-instruct`. These are
+the regression baseline for Planner V2:
+
+| contract | input | normalized | optimized | strategy | ai_calls | prompt_eval_count | eval_count | ollama_duration_ms | repair / fallback |
+|---|---|---|---|---|---|---|---|---|---|
+| ~17k | 17,168 | 16,482 | 6,952 | relevance | 1 | 3,853 (both runs) | 284 cold / 213 warm | ~68,097 cold / ~13,165 warm | no / no |
+| ~78k KONE | 78,686 | 76,880 | 13,361 | chunked | 3 | 9,050 (both runs) | 1,153 / 1,331 | ~119,186 / ~75,080 | no / no |
+
+Findings:
+
+- **Tokens and latency must be read separately.** `prompt_eval_count` was
+  identical in cold and warm runs. The latency gap is model load and cache
+  state, not input size. Planner changes are therefore judged by
+  `prompt_eval_count_total`, `ai_calls` and field quality, not by duration
+  alone.
+- **KONE quality issue:** the subject "KONE Care Servicevertrag" was
+  plausible, but the same title also came back as `contract_number`.
+  - The prompt rule exists ("only if explicitly printed in the document
+    … never construct one"), and the merge only takes `contract_number`
+    from the `basis` chunk. So the wrong value came from the `basis` call
+    itself, i.e. model behavior with 1.5B parameters, not a lost passage.
+  - Planner V2 can only reduce the risk indirectly: one call instead of
+    three, and less filler. Tests cover the generic case (a title without
+    a number keeps `null`; a non-`basis` chunk guessing the title is
+    ignored).
+  - If it persists after Planner V2, it is the first candidate for a
+    prompt v3 rule (a document title/product name is not a contract
+    number). No vendor-specific rule.
+
+### Status (2026-11-04): Planner V2 implemented
+
+Semantics are in
+[contract-text-optimization.md, "Planner V2"](contract-text-optimization.md#planner-v2---mandatory-vs-supporting-2026-11-04).
+
+- **Mandatory (within the hard per-call budget):** head + significant
+  blocks with small neighbors and mid-sentence continuations, plus each
+  group's best weak-only block.
+- **Supporting:** tail (safety net), then weak hits and large neighbors,
+  only within `target_chars` and at most `supporting_context_chars`
+  (1,500) per call.
+- **Chunking:** only when the mandatory blocks don't fit the hard budget.
+  `target_chars` no longer decides it. The `target_chars: 5,500` paradox
+  is covered by a test.
+- **Synthetic, 8,192 window:**
+  - 17k-type samples: ~6.4-6.9k → ~3.0-3.7k chars, still 1 call, all
+    clauses kept;
+  - a 25-clause-pair sample: chunked (3 calls, renewal + notice lost) → 1
+    call with everything.
+- **Expected on staging (to be confirmed, step 11 of the staging
+  validation):**
+  - ~17k: still 1 call, a clearly lower `prompt_eval_count`;
+  - ~78k KONE: 1 call (2 at most), if its mandatory blocks fit the
+    ~14,800-char budget. If KONE still needs 3 calls, the significant
+    blocks really exceed one call. Then the group-specific schemas above
+    are the next lever.
+
+Planner V2 measurements (fill in from staging):
+
+| contract | optimized | strategy | ai_calls | prompt_eval_count_total | eval_count_total | fields vs. baseline |
+|---|---|---|---|---|---|---|
+| short | | | | | | |
+| ~17k | | | | | | |
+| ~78k KONE | | | | | | |
 
 ## Better timing visibility
 
