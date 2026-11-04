@@ -30,7 +30,7 @@ import time
 
 from fastapi import APIRouter, Depends, Request
 
-from system.ai.extraction_runner import run_extraction
+from system.ai.extraction_runner import call_token_counts, run_extraction
 from system.ai.modes import get_mode
 from system.ai.resolver import resolve_model_profile
 from system.ai.warmup import run_warmup
@@ -138,6 +138,7 @@ def _log_analyze(log_fields: dict, observed: dict, status: str, started_at: floa
         "chunk_count=%(chunk_count)s ai_calls=%(ai_calls)s fallback_used=%(fallback_used)s "
         "normalization_ms=%(normalization_ms)s optimization_ms=%(optimization_ms)s "
         "repair_used=%(repair_used)s ollama_duration_ms=%(ollama_duration_ms)s "
+        "prompt_eval_count=%(prompt_eval_count)s eval_count=%(eval_count)s "
         "total_duration_ms=%(total_duration_ms)s",
         {
             **log_fields,
@@ -152,9 +153,23 @@ def _log_analyze(log_fields: dict, observed: dict, status: str, started_at: floa
             "optimization_ms": optimization.get("optimization_ms"),
             "repair_used": "ollama_repair_duration_ms" in timing,
             "ollama_duration_ms": timing.get("ollama_duration_ms"),
+            **_token_log_fields(optimization, timing, status),
             "total_duration_ms": round((time.monotonic() - started_at) * 1000, 1),
         },
     )
+
+
+def _token_log_fields(optimization: dict, timing: dict, status: str) -> dict:
+    """Ollama token counts for the whole request: the optimizer's exact run
+    totals, or - for modes without optimization (one call) - that call's
+    counts. None ("unknown", logged as None) when Ollama did not report
+    them or the request failed; never estimated from characters."""
+    if optimization:
+        return {
+            "prompt_eval_count": optimization.get("prompt_eval_count_total"),
+            "eval_count": optimization.get("eval_count_total"),
+        }
+    return call_token_counts(timing, succeeded=status == "success")
 
 
 @router.post("/api/v1/documents/warmup", response_model=ExtractionWarmupResponse)

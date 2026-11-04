@@ -25,6 +25,11 @@ Optimized modes (contract_extraction) - docs/contract-text-optimization.md:
   result is validated against the schema without any further AI call.
 
 The same resolved model profile is used for every call - no per-chunk model.
+
+Token telemetry (no extra call, read from the Ollama responses already
+received): the diagnostics carry `prompt_eval_count_total` /
+`eval_count_total` for the whole run (None unless exact, see
+_token_stats) and a per-call `calls` list.
 """
 
 from __future__ import annotations
@@ -131,21 +136,29 @@ def _run_optimized(
     observed["optimization"] = stats
     observed["timing"] = {}
     calls_timing: list[dict] = []
+    calls_log: list[tuple[PlannedCall, dict, bool]] = []
 
     def run_call(call: PlannedCall, timeout_seconds: float) -> dict:
         call_timing: dict = {}
         calls_timing.append(call_timing)
         stats["ai_calls"] += 1
-        return ollama_client.generate_structured(
-            build_prompt(prompt_template, context, call.text),
-            mode.response_schema,
-            model=profile.model,
-            timeout_seconds=timeout_seconds,
-            temperature=profile.temperature,
-            timing=call_timing,
-            num_ctx=profile.context_window_tokens,
-            deadline=deadline,
-        )
+        try:
+            result = ollama_client.generate_structured(
+                build_prompt(prompt_template, context, call.text),
+                mode.response_schema,
+                model=profile.model,
+                timeout_seconds=timeout_seconds,
+                temperature=profile.temperature,
+                timing=call_timing,
+                num_ctx=profile.context_window_tokens,
+                deadline=deadline,
+            )
+        except DocPipeError:
+            # Failed calls may have used tokens Ollama never reported.
+            calls_log.append((call, call_timing, False))
+            raise
+        calls_log.append((call, call_timing, True))
+        return result
 
     try:
         if plan.strategy == STRATEGY_CHUNKED:
@@ -166,6 +179,7 @@ def _run_optimized(
         timing = _sum_timing(calls_timing)
         observed["timing"] = timing
         stats["ai_ms"] = timing.get("ollama_duration_ms")
+        stats.update(_token_stats(calls_log))
 
     return ExtractionOutcome(result=result, optimization=stats, timing=timing)
 
@@ -199,6 +213,47 @@ def _run_single_with_fallback(plan, settings, optimizable, profile, deadline, ru
     stats["fallback_used"] = True
     stats["fallback_chars"] = len(reduced.text)
     return run_call(reduced, deadline - time.monotonic())
+
+
+TOKEN_COUNT_FIELDS = ("prompt_eval_count", "eval_count")
+
+
+def call_token_counts(timing: dict, *, succeeded: bool = True) -> dict[str, int | None]:
+    """Ollama token counts of one generate_structured() call, from the
+    timing dict it filled: the primary attempt plus the repair attempt if
+    one ran. A value is None ("unknown") unless every Ollama response of
+    the call reported it - a call that failed (timeout, error) may have
+    used tokens that were never reported, so it is always None. A reported
+    0 stays 0."""
+    phases = [phase for phase in ("primary", "repair") if f"ollama_{phase}_duration_ms" in timing]
+    counts: dict[str, int | None] = {}
+    for field in TOKEN_COUNT_FIELDS:
+        values = [timing.get(f"ollama_{phase}_{field}") for phase in phases]
+        known = succeeded and bool(phases) and all(isinstance(v, int) for v in values)
+        counts[field] = sum(values) if known else None
+    return counts
+
+
+def _token_stats(calls_log: list[tuple[PlannedCall, dict, bool]]) -> dict:
+    """Run totals plus per-call values. A total is only reported when it is
+    exact - every call of the run has a known value - otherwise None; the
+    per-call list still shows what is known. Never derived from characters."""
+    calls = []
+    for call, timing, succeeded in calls_log:
+        counts = call_token_counts(timing, succeeded=succeeded)
+        calls.append(
+            {
+                "label": call.label,
+                "text_chars": len(call.text),
+                **counts,
+                "repair_used": "ollama_repair_duration_ms" in timing,
+            }
+        )
+    totals: dict[str, int | None] = {}
+    for field in TOKEN_COUNT_FIELDS:
+        values = [entry[field] for entry in calls]
+        totals[f"{field}_total"] = sum(values) if values and all(v is not None for v in values) else None
+    return {**totals, "calls": calls}
 
 
 def _sum_timing(calls_timing: list[dict]) -> dict:

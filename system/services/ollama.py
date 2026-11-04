@@ -16,7 +16,7 @@ Dec 2024, stable):
   Response: {"response": "<generated text, JSON-serialized>",
              "total_duration": <ns>, "load_duration": <ns>,
              "prompt_eval_duration": <ns>, "eval_duration": <ns>,
-             "eval_count": <int>, ...}
+             "prompt_eval_count": <int>, "eval_count": <int>, ...}
 
 Passing the mode's response_schema as `format` (rather than the literal
 string "json") constrains Ollama's own grammar-based decoding to that
@@ -62,6 +62,8 @@ _OLLAMA_NS_METRIC_FIELDS = {
     "prompt_eval_duration": "prompt_eval_ms",
     "eval_duration": "eval_ms",
 }
+# Ollama's token counts (plain ints), kept under their own names.
+_OLLAMA_COUNT_FIELDS = ("prompt_eval_count", "eval_count")
 
 
 def _bounded_timeout(timeout_seconds: float, deadline: float | None) -> float:
@@ -105,7 +107,7 @@ class OllamaClient:
         a repair call actually happened) and the summed
         `ollama_duration_ms` - plus, when Ollama's own response included
         them, `ollama_primary_load_ms`/`_prompt_eval_ms`/`_eval_ms`/
-        `_eval_count` (and the `_repair_` equivalents). This is an output
+        `_prompt_eval_count`/`_eval_count` (and the `_repair_` equivalents). This is an output
         parameter rather than a return-value change so the method's return
         contract (a plain result dict) stays exactly as every existing
         caller/test already expects.
@@ -230,9 +232,15 @@ class OllamaClient:
             value = body.get(src_field)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 metrics[dest_key] = round(value / 1_000_000, 1)
-        eval_count = body.get("eval_count")
-        if isinstance(eval_count, int) and not isinstance(eval_count, bool):
-            metrics["eval_count"] = eval_count
+        # Token counts: prompt_eval_count = prompt tokens Ollama actually
+        # evaluated for this call (a prefix reused from its prompt cache is
+        # not evaluated again, so this can be lower than the prompt size),
+        # eval_count = generated tokens. Only a non-negative int counts - a
+        # missing/invalid value stays absent (unknown), a real 0 stays 0.
+        for field in _OLLAMA_COUNT_FIELDS:
+            value = body.get(field)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                metrics[field] = value
         return metrics
 
     @staticmethod
@@ -240,7 +248,7 @@ class OllamaClient:
         if timing is None:
             return
         timing[f"ollama_{phase}_duration_ms"] = metrics["duration_ms"]
-        for key in ("load_ms", "prompt_eval_ms", "eval_ms", "eval_count"):
+        for key in ("load_ms", "prompt_eval_ms", "eval_ms", *_OLLAMA_COUNT_FIELDS):
             if key in metrics:
                 timing[f"ollama_{phase}_{key}"] = metrics[key]
 

@@ -121,6 +121,10 @@ class FakeOllamaClient:
         # deterministic (no real wall-clock duration).
         self.fake_primary_duration_ms = 12.3
         self.fake_repair_duration_ms = 4.5
+        # Token telemetry: per-call counts the fake "Ollama" reports for the
+        # primary attempt (None = field absent, like an Ollama that omits it).
+        self.fake_prompt_eval_count: int | None = None
+        self.fake_eval_count: int | None = None
         # Warm-up: independent mode/counters from generate_structured's -
         # a test can make a normal query succeed while warm-up fails, or
         # vice versa, without the two paths interfering.
@@ -154,6 +158,10 @@ class FakeOllamaClient:
         self.last_temperature = temperature
         if timing is not None:
             timing["ollama_primary_duration_ms"] = self.fake_primary_duration_ms
+            if self.fake_prompt_eval_count is not None:
+                timing["ollama_primary_prompt_eval_count"] = self.fake_prompt_eval_count
+            if self.fake_eval_count is not None:
+                timing["ollama_primary_eval_count"] = self.fake_eval_count
             repair_used = self.mode == "invalid_response"
             if repair_used:
                 timing["ollama_repair_duration_ms"] = self.fake_repair_duration_ms
