@@ -181,8 +181,10 @@ Priority order:
    `prompt_eval_count`/`eval_count`; phase durations still only
    per-call internally);
 4. Planner V2 - split mandatory passages from additional context and decide
-   against the real prompt/context budget (**implemented 2026-11-04**;
-   staging validation against the baseline below still open);
+   against the real prompt/context budget (**implemented 2026-11-04**; it
+   **regressed on the real KONE contract**, so Planner V2.1 bounds the
+   mandatory set by field coverage, **2026-11-05**; staging validation of
+   V2.1 open, see below);
 5. reduce caller-supplied assistant context/history;
 6. only after those measurements revisit model/hardware tuning.
 
@@ -434,7 +436,71 @@ Planner V2 measurements (fill in from staging):
 |---|---|---|---|---|---|---|
 | short | | | | | | |
 | ~17k | | | | | | |
-| ~78k KONE | | | | | | |
+| ~78k KONE | 40,629 | chunked | 3 | 17,083 (1 successful run) | 797 | - (see regression below) |
+
+### Planner V2 regression on the real KONE contract (staging, 2026-11-05)
+
+Same host, model, profile (`heavy`, 8,192), prompt v2 as the baseline.
+Measured history, kept for comparison:
+
+| planner | input | normalized | optimized | strategy | ai_calls | prompt_eval_count | eval_count | duration | result |
+|---|---|---|---|---|---|---|---|---|---|
+| before Planner V2 | 78,686 | 76,880 | 13,361 | chunked | 3 | 9,050 | 1,153 / 1,331 | ~119 s / ~75 s | ok |
+| Planner V2, run 1 | 78,686 | 76,880 | 40,629 | chunked | 3 | unknown | - | ~180 s | `ai_timeout` |
+| Planner V2, run 2 | 78,686 | 76,880 | 40,629 | chunked | 3 | unknown | - | ~180 s | `ai_timeout` |
+| Planner V2, run 3 | 78,686 | 76,880 | 40,629 | chunked | 3 | 17,083 | 797 | 126.7 s | ok |
+
+**Root cause**, reproduced synthetically with the `build_service_contract`
+sample: V2 ends up chunked, 3 calls, 43,873 chars.
+
+1. V2 made **every** strong hit mandatory. In a long service contract the
+   strong patterns `Leistungsumfang`, `Preis`, `Vergütung`, `Kündigung`,
+   `Laufzeit` and amounts recur in nearly every per-installation
+   paragraph. In the synthetic sample 66 of 71 blocks were "significant",
+   so the mandatory set could not fit one call.
+2. In the chunked path every chunk planned its group's hits against the
+   full hard budget (~14,800) instead of V1's `chunk_target_chars`
+   (4,500). Each of the 3 chunks filled up to ~14k: 3 × ~14k ≈ 40k chars
+   and ~17k prompt tokens, and the CPU box then ran into the 180 s limit.
+
+`supporting_context_chars` played no part (supporting was ~0).
+
+### Status (2026-11-05): Planner V2.1 implemented
+
+Mandatory = **coverage**, not all hits. Per group and strong pattern:
+
+- the best block (the clause whose heading names the topic, else the
+  highest score);
+- plus one block with a differing concrete value, as the contradiction
+  guard;
+- redundant repeats become supporting.
+
+Details are in
+[contract-text-optimization.md, "Planner V2.1"](contract-text-optimization.md#planner-v21---mandatory-coverage-bounding-2026-11-05).
+No new config option, no prompt/schema/merge/normalization change.
+
+Synthetic: the service-contract samples (42k / 70k) go from V2's 3 calls
+with 43,873 chars (payment clause lost) to **1 call with ~3,700 chars** and
+every core clause. The ~17k samples stay at 1 call, ~3.0-3.3k.
+
+Planner V2.1 staging measurements (to be filled in, contract-text-optimization.md
+"Staging validation" step 12):
+
+| contract | input | normalized | mandatory | supporting | optimized | strategy | ai_calls | prompt_eval_count | eval_count | duration | result quality |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| short | | | | | | | | | | | |
+| ~17k | 17,168 | 16,482 | | | | | | | | | |
+| ~78k KONE | 78,686 | 76,880 | | | | | | | | | |
+
+KONE gate:
+- **required:** optimized far below 40,629, prompt_eval_count below
+  17,083, no timeout;
+- **preferred:** ≤ ~9,050 prompt tokens;
+- **always:** no field worse than the pre-V2 baseline.
+
+If KONE still needs 3 calls after V2.1, its unique evidence really
+exceeds one call. Record which groups cause it; then group-specific
+schemas are the next lever.
 
 ## Better timing visibility
 

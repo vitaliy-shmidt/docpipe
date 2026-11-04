@@ -159,14 +159,16 @@ lowering it to 5,500 turned a 1-call contract into 3 chunks on staging.
 
 1. the document head (`head_chars`, ~1,500: parties, number, subject). The
    provider name is often stated there without any keyword;
-2. every significant block (at least one strong pattern), interleaved
-   across groups, together with:
-   - its small neighbors (≤ 500 chars: heading, lead-in, follow-up
-     sentence);
-   - any block of the same paragraph it continues into or from
-     mid-sentence (`… beträgt` + `3 Monate …` split by segmentation).
-     Normalization V2 deliberately does not join digit-initial
-     continuations; this keeps them together anyway;
+2. the **coverage set** of significant blocks (Planner V2.1, see below),
+   interleaved across groups. Each block comes with only its minimal
+   context, never a chain:
+   - the block of the same paragraph or table it continues into or from:
+     mid-sentence (`… beträgt` + `3 Monate …`), or two table rows on
+     both sides of the cut, also across a blank line. Normalization V2
+     deliberately does not join digit-initial continuations; this keeps
+     them together anyway;
+   - a heading line directly before it;
+   - the block its lead-in (`… wie folgt:`) introduces;
 3. per field group, its best **weak-only** block, at most one per group.
    Some fields only ever have weak evidence: the payment interval
    (`quartalsweise`, `Rechnung`), a bare date.
@@ -175,7 +177,8 @@ lowering it to 5,500 turned a 1-call contract into 3 chunks on staging.
 
 4. the document tail (`tail_chars`, ~600: signatures, annexes) as a safety
    net, within the hard budget;
-5. other weak hits, then larger neighbors of significant blocks. They must
+5. redundant strong hits (best first), the small neighbors (≤ 500 chars)
+   of mandatory blocks, other weak hits, then larger neighbors. They must
    fit `target_chars` (soft) **and** may add at most
    `supporting_context_chars` (default 1,500) per call. Free room is not
    filled just because it exists;
@@ -192,13 +195,73 @@ The planner stays deterministic (text, scores, groups, config, budget).
 It never reacts to Ollama telemetry, and it is linear in the number of
 blocks (no search, no embeddings, no LLM).
 
+### Planner V2.1 - mandatory coverage bounding (2026-11-05)
+
+**Staging regression of V2.** On the real ~78k service contract V2 made
+**every** strong hit mandatory. Generic strong words (`Leistungsumfang`,
+`Preis`, `Vergütung`, `Kündigung`, `Laufzeit`, amounts) recur in almost
+every per-installation paragraph, so the significant blocks did not fit
+one call. The planner chunked, and each of the 3 chunks planned its group's
+hits against the full ~14,800-char hard budget. V1 had capped chunks at
+`chunk_target_chars` (4,500). The result was 40,629 chars, 17,083 prompt
+tokens, and 2 of 3 runs hit the 180 s timeout (numbers in
+performance-roadmap.md).
+
+**V2.1: coverage, not every hit.** Per field group and **strong pattern**
+(e.g. `kündig`, `verläng`, `laufzeit`, an amount):
+
+1. The pattern's best block is mandatory. Best means the earliest block
+   whose **heading line names the topic** (`§ 5 Verlängerung`: the clause
+   itself, not a special clause that mentions it). Without such a heading,
+   it is the highest-scoring block, earliest on ties. A single-line block
+   (e.g. a table row) has no heading.
+2. **Contradiction guard:** the next-best block of that pattern is also
+   mandatory if it carries a concrete **value** the first one doesn't:
+   - amounts, percentages, durations, dates, reference numbers;
+   - compared over the block's sentence/table unit, so a value cut off
+     into the next block counts.
+
+   So `3 Monate` vs. `6 Monate` or `250 EUR` vs. `300 EUR` both reach the
+   model. Two differing values are enough for the prompt's contradiction
+   rule (`null` + notes). More variants are supporting. Values are only
+   compared as strings, never interpreted.
+3. Every other block matching an already covered pattern without a new
+   value (boilerplate repeats) is **supporting**: first in line for
+   supporting room, but capped like all supporting context.
+
+Head, weak-only promotion, the hard/soft budget roles, one-call-first,
+the no-keyword fallback and `direct` are unchanged. `chunked` still
+happens when the bounded mandatory set does not fit one call. Genuinely
+different clause types (each its own pattern) are never bounded away.
+Chunks plan the same way, so they shrink too. There is no new config
+option: the bound follows from the patterns, not from a count knob.
+
+Synthetic, 8,192 window (`tests/contract_samples.py`):
+
+| sample | V2 | V2.1 (mandatory + supporting) |
+|---|---|---|
+| ~17k dense prose | relevance, 1 call, 3,038 | relevance, 1 call, 3,038 (2,086 + 874) |
+| service contract, 60 installations (42k) | **chunked, 3 calls, 43,873**, payment clause lost | relevance, 1 call, 3,676 (2,184 + 1,414), all core clauses |
+| service contract, 100 installations (70k) | **chunked, 3 calls, 43,873**, payment clause lost | relevance, 1 call, 3,684 (2,184 + 1,422), all core clauses |
+| 25 long package clause pairs (76k) | chunked, 3 calls, 31,962 | relevance, 1 call, 5,795 |
+| 10 distinct clause types (24k) | - | relevance, 1 call, 11,023 (above `target_chars`, within the hard budget) |
+| 10 distinct clause types at a 6,000 budget | - | chunked (unique evidence really exceeds one call) |
+
+Known limits:
+
+- A third or later differing value of the same pattern is supporting. The
+  model still sees a contradiction and reports `null` + notes, but the
+  notes may not list every value.
+- A pattern's "main clause" is found by its heading. A document without
+  topic headings falls back to score/position ranking, the V2 order.
+
 ## Strategies and thresholds
 
 | Strategy | When | AI calls |
 |---|---|---|
 | `direct` | normalized text ≤ `direct_limit_chars` (capped by the call budget) | 1, complete normalized text |
-| `relevance` | otherwise, if all **mandatory** passages (head + significant blocks) fit the **hard** per-call budget, even above `target_chars` | 1 |
-| `chunked` | the significant blocks do not fit one call's hard budget | one per field group with relevant passages, so 1-3 (`basis` always); each chunk again mandatory-first within the hard budget, supporting within `chunk_target_chars` |
+| `relevance` | otherwise, if all **mandatory** passages (head + the coverage set of significant blocks, V2.1) fit the **hard** per-call budget, even above `target_chars` | 1 |
+| `chunked` | the bounded mandatory passages do not fit one call's hard budget | one per field group with relevant passages, so 1-3 (`basis` always); each chunk again mandatory-first within the hard budget, supporting within `chunk_target_chars` |
 
 A small contract is never reduced. A text is never cut through the
 middle of a passage; blind truncation (`text[:N]`) does not exist. If
@@ -405,6 +468,11 @@ excerpt markers, so together they are slightly less than
 `optimized_chars`. For `direct` all text counts as mandatory. They are only
 in the response diagnostics, not in the log line.
 
+`mandatory_candidate_count` / `mandatory_block_count` (V2.1) count the
+significant blocks found and the blocks in the mandatory tier, summed over
+calls. A large gap means coverage bounding demoted redundant repeats. Both
+are counts only, with no text and no keywords.
+
 ### Ollama token telemetry
 
 Real token counts come from the Ollama responses DocPipe already gets. No
@@ -586,6 +654,25 @@ deploy: the content must contain `[Excerpt n/m]`.
     Compare the KONE contract's `contract_number` specifically. The
     baseline wrongly reported the contract title there (see
     performance-roadmap.md).
+12. **Planner V2.1 validation** (after the V2 regression on the KONE
+    contract). Same three contracts, same procedure as step 11. Record
+    additionally `mandatory_chars`, `supporting_chars`,
+    `mandatory_candidate_count` and `mandatory_block_count` from the
+    response's `text_optimization`:
+
+    | contract | input | normalized | mandatory | supporting | optimized | strategy | ai_calls | prompt_eval_count_total | eval_count_total | total_duration_ms | fields vs. baseline |
+    |---|---|---|---|---|---|---|---|---|---|---|---|
+    | short - V2.1 | | | | | | | | | | | |
+    | ~17k - V2.1 | | | | | | | | | | | |
+    | ~78k KONE - V2.1 | 78,686 | 76,880 | | | | | | | | | |
+
+    KONE success criteria:
+    - **required:** `optimized_chars` far below 40,629, `prompt_eval_count`
+      below 17,083, no `ai_timeout`;
+    - **preferred:** `prompt_eval_count` ≤ ~9,050 (the pre-V2 baseline);
+    - **always:** no field worse than the pre-V2 baseline.
+
+    ~17k: still 1 call, optimized ~3-4k, no lost field. Short: `direct`.
 
 
 ## Next optimization pass (2026-11-04)

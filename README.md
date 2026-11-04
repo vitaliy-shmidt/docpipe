@@ -1031,7 +1031,11 @@ Planner V2 (mandatory vs. supporting passages, one call within the hard
 budget, chunking only when mandatory passages don't fit, safe no-keyword
 fallback, digit-initial continuations, contract-number regression,
 real-client relevance/chunked/repair/fallback runs) is covered by
-`tests/test_planner_v2.py`.
+`tests/test_planner_v2.py`. Planner V2.1 coverage bounding has its own
+tests in `tests/test_planner_v2_1.py`: a KONE-like ~70k service contract
+with repeated boilerplate hits, contradicting notice periods and prices,
+table header/value rows, the main clause winning over look-alike special
+clauses, and the neighbor chain limit.
 
 Contract prompt v2 and Ollama token telemetry are covered by
 `tests/test_contract_prompt_v2_token_metrics.py`. It checks the v2
