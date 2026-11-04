@@ -1075,3 +1075,13 @@ SQL/tool access, RAG/document retrieval, an LLM-based router, per-client
 assistant model-profile overrides, and Prompt Lab editing for assistant
 prompts specifically (they're runtime-versioned like extraction prompts,
 just not yet reachable through `/lab/...`).
+
+
+## Performance roadmap
+
+Current real-server CPU-only measurements and the next optimization direction
+are tracked in
+[docs/performance-roadmap.md](docs/performance-roadmap.md). The current focus is
+to reduce deterministic text/prompt/context overhead before revisiting model or
+hardware tuning. This does not change DocPipe's stateless boundary: background
+job orchestration remains the responsibility of consuming applications.
