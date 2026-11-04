@@ -295,3 +295,36 @@ POST /api/v1/assistant/warmup
   an assistant prompt version yet. Changing one today means editing
   `system/prompts/assistant/<mode>/v1.txt` (or adding a new base version)
   like any other repo file.
+
+
+## Performance guidance for callers (2026-11-04)
+
+Real CPU-only staging measurements reinforce the existing trust-boundary
+design: **the caller should send the smallest scope-correct context that can
+answer the question**.
+
+Observed examples with `qwen2.5:0.5b-instruct`:
+
+- `hotel_health_summary`: ~3,837 serialized context characters and 6 history
+  turns -> ~26.7 s;
+- `cross_domain_question`: ~2,639 context characters and no history -> ~11.9 s.
+
+These are environment-specific observations, not an SLA, but they show that
+context/history size materially affects latency even with a small model.
+
+Consumer guidance:
+
+- summary question -> send KPIs/counts rather than complete row dumps;
+- focused entity question -> send that entity plus only required relations;
+- "which items" question -> send a small already-sorted relevant list;
+- send only domains needed for the current question;
+- history is for reference resolution, not a transcript: include only turns
+  necessary for the current follow-up;
+- deterministically answerable structured facts should preferably be answered
+  by the consumer without an LLM call.
+
+The request limits (100k serialized context, up to 8 history turns) remain
+**safety maxima**, not recommended payload sizes.
+
+The full current performance findings and optimization roadmap are in
+[performance-roadmap.md](performance-roadmap.md).
