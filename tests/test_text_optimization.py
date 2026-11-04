@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import time
 
-from system.ai.modes import MODES
+from system.ai.modes import MODES, PROMPTS_DIR
 from system.ai.prompting import build_prompt
 from system.ai.text_optimization.contract import CONTRACT_DEPENDENT_FIELDS, CONTRACT_GROUPS
 from system.ai.text_optimization.merge import merge_results
@@ -36,7 +36,10 @@ SCHEMA = MODES["contract_extraction"].response_schema
 SETTINGS = TextOptimizationSettings()
 # Per-call budgets as computed for the real v1 prompt: Ollama's default
 # 4096-token window, and a profile with context_window_tokens: 8192.
-_TEMPLATE = open("system/prompts/contract_extraction/v1.txt", encoding="utf-8").read()
+# The active (default) contract prompt version - what production sends.
+_TEMPLATE = (
+    PROMPTS_DIR / "contract_extraction" / f"{MODES['contract_extraction'].default_prompt_version}.txt"
+).read_text(encoding="utf-8")
 _OVERHEAD = len(build_prompt(_TEMPLATE, {"document_type": "contract"}, ""))
 SMALL_BUDGET = call_budget_chars(4096, _OVERHEAD)
 LARGE_BUDGET = call_budget_chars(8192, _OVERHEAD)
@@ -285,9 +288,15 @@ def test_small_contract_is_sent_directly_and_complete():
     assert plan.stats["chunk_count"] == 0
 
 
-def test_3k_contract_is_direct_even_with_the_small_default_window():
-    plan = _plan(build_contract(3000), budget=SMALL_BUDGET)
-    assert plan.strategy == STRATEGY_DIRECT
+def test_small_contract_fitting_the_small_default_window_is_direct():
+    # ~3k chars is the 4,096-token window's per-call budget with the active
+    # prompt (v2: ~3,000; v1 was ~3,300) - a contract that fits it is sent
+    # complete, never reduced.
+    raw = build_contract(2800)
+    assert len(normalize_text(raw)) <= SMALL_BUDGET
+    assert _plan(raw, budget=SMALL_BUDGET).strategy == STRATEGY_DIRECT
+    # Just over the budget it is reduced, not cut:
+    assert _plan(build_contract(3600), budget=SMALL_BUDGET).strategy == STRATEGY_RELEVANCE
 
 
 def test_10k_contract_is_reduced_but_keeps_relevant_clauses():

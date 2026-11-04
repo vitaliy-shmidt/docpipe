@@ -17,13 +17,16 @@ import httpx
 import pytest
 
 from system.ai.extraction_runner import run_extraction
-from system.ai.modes import MODES
+from system.ai.modes import MODES, PROMPTS_DIR
 from system.ai.text_optimization.settings import default_text_optimization
 from system.config import ModelProfile
 from system.services.ollama import OllamaClient
 
 CONTRACT = MODES["contract_extraction"]
-TEMPLATE = open("system/prompts/contract_extraction/v1.txt", encoding="utf-8").read()
+# The active (default) contract prompt version - what production sends.
+TEMPLATE = (
+    PROMPTS_DIR / "contract_extraction" / f"{MODES['contract_extraction'].default_prompt_version}.txt"
+).read_text(encoding="utf-8")
 PROFILE = ModelProfile(provider="ollama", model="m", timeout_seconds=60, temperature=0)
 EXPECTED = {
     "vendor_name": "Musterlift Testservice GmbH",

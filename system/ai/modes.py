@@ -98,9 +98,13 @@ MODES: dict[str, Mode] = {
     # assistant mode contract_question (system/assistant/modes.py), which
     # answers questions about already-known contract data instead of
     # extracting facts from a document.
+    # Default v2 (docs/contract-text-optimization.md "Prompt v2"): v1 plus
+    # the meaning of [Excerpt n/m] markers and table column gaps, and that
+    # contradictions across excerpts are not reconciled. v1 stays shipped -
+    # activating it via the Prompt Lab is the rollback.
     "contract_extraction": _load_mode(
         "contract_extraction",
-        "v1",
+        "v2",
         _MAX_INPUT_LENGTH,
         model_profile="standard",
         description=(

@@ -19,7 +19,7 @@ import pytest
 
 from system import main as main_module
 from system.ai.extraction_runner import run_extraction
-from system.ai.modes import MODES
+from system.ai.modes import MODES, PROMPTS_DIR
 from system.ai.prompting import build_prompt
 from system.ai.text_optimization.normalize import normalize_text
 from system.ai.text_optimization.settings import TextOptimizationSettings, default_text_optimization
@@ -38,7 +38,10 @@ from tests.contract_samples import (
 
 CONTRACT = MODES["contract_extraction"]
 MAINTENANCE = MODES["maintenance_extraction"]
-TEMPLATE = open("system/prompts/contract_extraction/v1.txt", encoding="utf-8").read()
+# The active (default) contract prompt version - what production sends.
+TEMPLATE = (
+    PROMPTS_DIR / "contract_extraction" / f"{MODES['contract_extraction'].default_prompt_version}.txt"
+).read_text(encoding="utf-8")
 PROFILE = ModelProfile(provider="ollama", model="m", timeout_seconds=100, temperature=0)
 EMPTY_RESULT = {field: None for field in CONTRACT.response_schema["properties"]}
 
