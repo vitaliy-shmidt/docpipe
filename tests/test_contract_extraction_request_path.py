@@ -21,6 +21,7 @@ from system.ai.modes import MODES, PROMPTS_DIR
 from system.ai.text_optimization.settings import default_text_optimization
 from system.config import ModelProfile
 from system.services.ollama import OllamaClient
+from tests.contract_samples import distinct_clauses
 
 CONTRACT = MODES["contract_extraction"]
 # The active (default) contract prompt version - what production sends.
@@ -57,16 +58,17 @@ def _filler(count: int, tag: str) -> str:
     return "".join(f"§ {tag}{i} Allgemeines\n{FILLER * 3}\n\n" for i in range(count))
 
 
-def _extra_fees(count: int) -> str:
-    return "".join(
-        f"§ X{i} Vergütung Zusatzleistung\nPauschale {i},00 EUR je Einsatz.\n\n" for i in range(count)
-    )
+def _extra_clauses(count: int) -> str:
+    # Unique mandatory evidence (each clause its own strong pattern, a long
+    # block) - repeated look-alike clauses no longer force chunking
+    # (Planner V2.1 coverage bounding), genuinely different ones still do.
+    return "".join(f"{clause}\n\n{_filler(1, f'X{i}')}" for i, clause in enumerate(distinct_clauses(count)))
 
 
 CASES = {
     "direct": HEAD + KEY,
     "relevance": HEAD + _filler(14, "A") + KEY + _filler(14, "B"),
-    "chunked": HEAD + _filler(40, "A") + KEY + _filler(40, "B") + _extra_fees(25) + _filler(30, "C"),
+    "chunked": HEAD + _filler(40, "A") + KEY + _filler(40, "B") + _extra_clauses(10) + _filler(30, "C"),
 }
 
 

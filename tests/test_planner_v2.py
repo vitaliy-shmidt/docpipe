@@ -31,12 +31,14 @@ from system.ai.text_optimization.planner import (
 from system.ai.text_optimization.settings import TextOptimizationSettings
 from system.config import ConfigError, ModelProfile
 from tests.contract_samples import (
+    PACKAGE_DETAIL,
     PDF_RELEVANT_SNIPPETS,
     PRICE_TABLE,
     RELEVANT_SNIPPETS,
     RENEWAL,
     build_contract,
     build_pdf_contract,
+    distinct_clauses,
     filler_section,
 )
 from tests.test_contract_text_optimization_pipeline import _load as _load_config
@@ -59,17 +61,35 @@ def _sent(plan) -> str:
     return "\n".join(call.text for call in plan.calls)
 
 
-def _many_clauses(copies: int) -> str:
-    """More distinct significant clauses than the soft target holds."""
+def _many_clauses(copies: int, *, detail: bool = True) -> str:
+    """Many repeated package clauses (same patterns, different values). With
+    `detail` each clause is a long block (PACKAGE_DETAIL), so even the
+    bounded mandatory set (Planner V2.1: best clause + one differing value
+    per pattern) exceeds the 4,096-window budget."""
+    extra = f" {PACKAGE_DETAIL}" if detail else ""
     parts = [build_contract(4000)]
     for i in range(copies):
         parts.append(
             f"§ {20 + i} Preisanpassung Nr. {i}\nDie Vergütung für Paket {i} beträgt {100 + i},00 € "
-            f"quartalsweise.\n\n§ {60 + i} Sonderkündigung Nr. {i}\nKündigung von Paket {i} mit einer "
-            f"Frist von {i + 1} Wochen; die Laufzeit verlängert sich sonst um {i + 1} Monate."
+            f"quartalsweise.{extra}\n\n§ {60 + i} Sonderkündigung Nr. {i}\nKündigung von Paket {i} "
+            f"mit einer Frist von {i + 1} Wochen; die Laufzeit verlängert sich sonst um {i + 1} Monate."
+            f"{extra}"
         )
         parts.append(filler_section(100 + i, 1200))
     return "\n\n".join(parts)
+
+
+def _distinct_contract(count: int) -> str:
+    """build_contract plus `count` long clauses that each carry a different
+    strong pattern - unique mandatory evidence, separated by filler."""
+    parts = [build_contract(4000)]
+    for i, clause in enumerate(distinct_clauses(count)):
+        parts += [clause, filler_section(200 + i, 1200)]
+    return "\n\n".join(parts)
+
+
+def _first_sentence(clause: str) -> str:
+    return clause.split("\n", 1)[1].split(". ", 1)[0]
 
 
 # --- One-call-first / soft vs. hard budget ---------------------------------------
@@ -102,22 +122,36 @@ def test_supporting_context_never_forces_chunking():
 
 
 def test_soft_target_exceeded_but_hard_budget_fits_stays_one_call():
-    plan = _plan(_many_clauses(25))
+    # Unique evidence (10 different clause types) above target_chars but
+    # within the real per-call budget: one call, nothing dropped.
+    plan = _plan(_distinct_contract(10))
     stats = plan.stats
     assert stats["mandatory_chars"] > SETTINGS.target_chars  # over the soft target ...
     assert stats["strategy"] == STRATEGY_RELEVANCE and len(plan.calls) == 1  # ... still one call
     assert len(plan.calls[0].text) <= LARGE_BUDGET  # never over the hard budget
     assert stats["dropped_passages"] == 0
-    for snippet in ("verlängert sich automatisch", "Kündigungsfrist: 3 Monate", "Preisanpassung Nr. 24"):
+    for clause in distinct_clauses(10):
+        assert _first_sentence(clause) in _sent(plan), clause
+    for snippet in RELEVANT_SNIPPETS:
         assert snippet in _sent(plan), snippet
+
+
+def test_unique_mandatory_evidence_over_the_hard_budget_is_chunked():
+    budget = 6000  # below the ~8k of unique evidence in this sample
+    plan = _plan(_distinct_contract(10), budget=budget)
+    assert plan.strategy == STRATEGY_CHUNKED
+    assert all(len(call.text) <= budget for call in plan.calls)
+    sent = _sent(plan)
+    for clause in distinct_clauses(10):
+        assert _first_sentence(clause) in sent, clause
 
 
 def test_a_lower_target_chars_no_longer_forces_chunking():
     # Real staging finding: target_chars 5,500 turned a 1-call contract
     # into 3 chunks. The decision now only depends on the hard budget.
-    # 15 clauses: the V1 planner was 1 call at 7,000 but 3 chunks at 5,500
-    # (~11.7k chars) - the same paradox as on staging.
-    raw = _many_clauses(15)
+    # 15 short clause pairs: the V1 planner was 1 call at 7,000 but 3 chunks
+    # at 5,500 (~11.7k chars) - the same paradox as on staging.
+    raw = _many_clauses(15, detail=False)
     default, low = _plan(raw), _plan(raw, settings=TextOptimizationSettings(target_chars=5500))
     assert default.strategy == low.strategy == STRATEGY_RELEVANCE
     assert len(low.calls) == 1
@@ -211,16 +245,23 @@ def test_digit_initial_continuation_in_the_same_block_stays_together():
     assert "Die Kündigungsfrist beträgt\n3 Monate zum Ende der Vertragslaufzeit." in sent
 
 
-def test_digit_initial_continuation_split_across_blocks_is_kept_with_its_hit():
+@pytest.mark.parametrize(
+    "notice_at_end, months",
+    [
+        (False, 3),  # the split clause is the only notice clause
+        (True, 6),  # it contradicts § 14 (3 Monate) - its value is only in the second block
+    ],
+)
+def test_digit_initial_continuation_split_across_blocks_is_kept_with_its_hit(notice_at_end, months):
     # A long paragraph is split by segmentation exactly between
-    # "... beträgt" and "3 Monate ..." - the second half has no keyword of
+    # "... beträgt" and "N Monate ..." - the second half has no keyword of
     # its own and is a large block, but it continues the hit mid-sentence.
     lead = _filler_lines("Absatz A", 14)
     paragraph = (
-        f"{lead}\nDie Kündigungsfrist beträgt\n3 Monate zum Ende eines Kalendervierteljahres.\n"
+        f"{lead}\nDie Kündigungsfrist beträgt\n{months} Monate zum Ende eines Kalendervierteljahres.\n"
         f"{_filler_lines('Absatz B', 20)}"
     )
-    raw = _in_the_middle(build_contract(20000, dense=True), paragraph)
+    raw = _in_the_middle(build_contract(20000, dense=True, notice_at_end=notice_at_end), paragraph)
     normalized = normalize_text(raw)
     plan = _plan(raw, settings=TextOptimizationSettings(supporting_context_chars=0))
     # Precondition: the cut really falls between the two parts.
@@ -230,7 +271,7 @@ def test_digit_initial_continuation_split_across_blocks_is_kept_with_its_hit():
     assert any(b.endswith("Die Kündigungsfrist beträgt") for b in cut_blocks)
     sent = _sent(plan)
     assert "Die Kündigungsfrist beträgt" in sent
-    assert "3 Monate zum Ende eines Kalendervierteljahres." in sent
+    assert f"{months} Monate zum Ende eines Kalendervierteljahres." in sent
 
 
 def test_a_passage_relevant_for_several_groups_is_sent_once():

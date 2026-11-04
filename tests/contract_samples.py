@@ -214,3 +214,100 @@ def build_pdf_contract(target_chars: int, *, pages: int = 6) -> str:
         footer = "_" * 40 + "\n" + PDF_FOOTER_TEMPLATE.format(page=page + 1, pages=pages)
         out.append(f"{header}\n\n\n\n{body}\n   \n\t\n{footer}\n")
     return "\f".join(out)
+
+
+# --- Long service contract with repeated boilerplate (Planner V2.1) ---------
+# Shaped like a real ~78k maintenance/service contract: a few core clauses
+# (provider, title, number, start, term, notice, renewal, price, interval)
+# and dozens of per-installation service paragraphs that keep repeating
+# strong keywords ("Leistungsumfang", "Preis", "Kündigung", "Laufzeit",
+# amounts). Invented names and numbers only.
+
+SERVICE_HEAD = (
+    "Musterlift Care Servicevertrag\n"
+    "Vertragsnummer: SV-4711-2026\n\n"
+    "zwischen\nHotel Beispielhof GmbH, Am Markt 1, 54321 Beispielstadt\n- Auftraggeber -\n\n"
+    "und\nMusterlift Service GmbH, Beispielweg 12, 12345 Musterstadt\n- Auftragnehmer -"
+)
+SERVICE_CORE = (
+    "§ 2 Vertragsbeginn und Laufzeit\n"
+    "Der Vertrag beginnt am 01.04.2026 und hat eine feste Laufzeit von 60 Monaten.",
+    "§ 3 Verlängerung\n"
+    "Nach Ablauf der festen Laufzeit verlängert sich der Vertrag automatisch um jeweils 12 Monate.",
+    "§ 4 Kündigung\n"
+    "Die Kündigungsfrist beträgt 6 Monate zum Ende der jeweiligen Vertragslaufzeit.",
+    "§ 5 Vergütung\n"
+    "Die Vergütung für alle Anlagen beträgt 2.480,00 EUR netto monatlich.",
+    "§ 6 Zahlung\nDie Rechnungsstellung erfolgt quartalsweise im Voraus.",
+)
+SERVICE_CORE_SNIPPETS = (
+    "Musterlift Care Servicevertrag",
+    "SV-4711-2026",
+    "Musterlift Service GmbH",
+    "beginnt am 01.04.2026",
+    "verlängert sich der Vertrag automatisch um jeweils 12 Monate",
+    "Kündigungsfrist beträgt 6 Monate",
+    "2.480,00 EUR netto monatlich",
+    "quartalsweise im Voraus",
+)
+_SERVICE_BOILERPLATE = (
+    "Der Leistungsumfang für Anlage {n} umfasst die Wartung nach Herstellervorgaben; Arbeiten außerhalb "
+    "des Leistungsumfangs werden nach der jeweils gültigen Preisliste berechnet.",
+    "Ersatzteile für Anlage {n} sind im Preis nicht enthalten und werden gesondert in Rechnung gestellt.",
+    "Eine Kündigung einzelner Leistungen für Anlage {n} ist nur zum Ende der Laufzeit des Vertrages möglich.",
+    "Für Anlage {n} gilt der Leistungsumfang gemäß Anlage A; die Vergütung ist in der Gesamtvergütung "
+    "enthalten.",
+    "Der Notdienst für Anlage {n} steht rund um die Uhr zur Verfügung und erfolgt im Rahmen der vereinbarten "
+    "Servicezeiten.",
+)
+
+
+def build_service_contract(sections: int = 60) -> str:
+    """~1.2k chars per installation section, core clauses near the start,
+    the payment clause in the middle."""
+    subject = "§ 1 Vertragsgegenstand\nWartung und Service der Aufzugsanlagen des Auftraggebers."
+    parts = [SERVICE_HEAD, subject]
+    parts += list(SERVICE_CORE[:4])
+    for n in range(sections):
+        body = " ".join(sentence.format(n=n + 1) for sentence in _SERVICE_BOILERPLATE)
+        parts.append(f"§ {10 + n} Anlage {n + 1}\n{body} {body.split(';')[0]}.")
+        if n == sections // 2:
+            parts.append(SERVICE_CORE[4])
+    parts.append("Musterstadt, den 15.03.2026\n\nAuftraggeber  Auftragnehmer")
+    return "\n\n".join(parts)
+
+
+# Neutral detail text (no contract keywords) appended to a clause inside the
+# same paragraph: makes each package clause a realistically long block, so
+# the clauses' distinct evidence really exceeds a small call budget even
+# after Planner V2.1's coverage bounding.
+PACKAGE_DETAIL = " ".join(
+    ["Einzelheiten hierzu stimmen die Parteien rechtzeitig und schriftlich miteinander ab."] * 8
+)
+
+
+# Clauses that each carry a DIFFERENT strong pattern (and value) - unique
+# mandatory evidence that coverage bounding must keep, unlike repeats.
+_DISTINCT_CLAUSES = (
+    "§ 40 Kundennummer\nDie Kundennummer lautet KD-55021.",
+    "§ 41 Vertragspartner\nVertragspartner auf Seiten des Dienstleisters ist die Musterlift Service GmbH.",
+    "§ 42 Versicherung\nDie Versicherungsscheinnummer lautet VS-88120.",
+    "Section 43 Special work\nThe scope of services for special work is agreed separately.",
+    "§ 44 Vertragsdauer\nDie Vertragsdauer richtet sich nach Anlage C.",
+    "§ 45 Vertragsende\nDas Vertragsende ist der 31.12.2030.",
+    "§ 46 Befristung\nDer Vertrag ist befristet abgeschlossen.",
+    "§ 47 Inkrafttreten\nDieser Vertrag tritt mit Unterzeichnung in Kraft.",
+    "§ 48 Fortsetzung\nEine stillschweigende Fortsetzung ist ausgeschlossen.",
+    "§ 49 Entgelt\nDas Entgelt für Sonderleistungen wird gesondert vereinbart.",
+    "§ 50 Anfahrt\nEine Gebühr für Anfahrten fällt nicht an.",
+    "§ 51 Gutachten\nDas Honorar für Gutachten richtet sich nach Aufwand.",
+    "Section 52 Notice period\nThe notice period for special services is two weeks.",
+    "Section 53 Special services\nEither party may terminate special services separately.",
+    "Section 54 Expiry\nSpecial services expire together with the main agreement.",
+    "Section 55 Remote diagnostics\nNo fees apply to remote diagnostics.",
+)
+
+
+def distinct_clauses(count: int) -> list[str]:
+    """Up to 16 long clauses, each with its own strong pattern."""
+    return [f"{clause} {PACKAGE_DETAIL}" for clause in _DISTINCT_CLAUSES[:count]]

@@ -26,6 +26,7 @@ from tests.contract_samples import (
     FOOTER_TEMPLATE,
     HEADER,
     NOTICE_AT_END,
+    PACKAGE_DETAIL,
     PRICE_TABLE,
     RELEVANT_SNIPPETS,
     build_contract,
@@ -329,14 +330,17 @@ def test_renewal_in_the_middle_is_kept():
 
 
 def _many_clauses_contract(copies: int) -> str:
-    """Lots of distinct significant clauses (more than one call can hold)."""
+    """Lots of distinct significant clauses (more than one call can hold).
+    Each clause is a long block (PACKAGE_DETAIL), so even the bounded
+    mandatory set (Planner V2.1) exceeds a small call budget."""
     parts = [build_contract(4000)]
     for i in range(copies):
         parts.append(
             f"§ {20 + i} Preisanpassung Nr. {i}\nDie Vergütung für Leistungspaket {i} beträgt {100 + i},00 € "
-            f"und ist quartalsweise fällig.\n\n"
+            f"und ist quartalsweise fällig. {PACKAGE_DETAIL}\n\n"
             f"§ {60 + i} Sonderkündigung Nr. {i}\nEine Kündigung von Leistungspaket {i} ist mit einer Frist "
-            f"von {i + 1} Wochen möglich; die Laufzeit verlängert sich sonst um {i + 1} Monate."
+            f"von {i + 1} Wochen möglich; die Laufzeit verlängert sich sonst um {i + 1} Monate. "
+            f"{PACKAGE_DETAIL}"
         )
         parts.append(filler_section(100 + i, 1200))
     return "\n\n".join(parts)

@@ -29,6 +29,7 @@ from system.services.ollama import OllamaClient
 from tests.conftest import AI_KEY, LAB_KEY, _build_test_settings, auth_headers
 from tests.contract_samples import (
     HEAD,
+    PACKAGE_DETAIL,
     PRICE_TABLE,
     RELEVANT_SNIPPETS,
     TERM,
@@ -94,8 +95,9 @@ def _many_clauses_contract(copies: int = 25) -> str:
     for i in range(copies):
         parts.append(
             f"§ {20 + i} Preisanpassung Nr. {i}\nDie Vergütung für Paket {i} beträgt {100 + i},00 € "
-            f"quartalsweise.\n\n§ {60 + i} Sonderkündigung Nr. {i}\nKündigung von Paket {i} mit einer "
-            f"Frist von {i + 1} Wochen; die Laufzeit verlängert sich sonst um {i + 1} Monate."
+            f"quartalsweise. {PACKAGE_DETAIL}\n\n§ {60 + i} Sonderkündigung Nr. {i}\nKündigung von Paket {i} "
+            f"mit einer Frist von {i + 1} Wochen; die Laufzeit verlängert sich sonst um {i + 1} Monate. "
+            f"{PACKAGE_DETAIL}"
         )
         parts.append(filler_section(100 + i, 1200))
     return "\n\n".join(parts)
