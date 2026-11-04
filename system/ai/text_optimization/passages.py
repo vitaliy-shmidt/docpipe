@@ -11,6 +11,7 @@ to pick, a couple of re-renders at most to honour marker overhead.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 
 from system.ai.text_optimization.normalize import is_table_like
@@ -67,6 +68,9 @@ class Selection:
     # the rendering) - Planner V2 diagnostics.
     mandatory_chars: int = 0
     supporting_chars: int = 0
+    # Planner V2.1: significant blocks found vs. blocks in the mandatory tier.
+    candidate_count: int = 0
+    mandatory_block_count: int = 0
 
     @property
     def complete(self) -> bool:
@@ -166,6 +170,32 @@ def _attach_headings(text: str, blocks: list[tuple[int, int]]) -> list[tuple[int
     return result
 
 
+class BlockScore(dict):
+    """group name -> weighted score (a plain dict for every existing use),
+    plus `strong`: group name -> indices of the strong patterns that matched
+    and `value_keys`: the block's concrete business values (see _VALUE_RE) -
+    what Planner V2.1's coverage bounding needs."""
+
+    __slots__ = ("strong", "heading_strong", "value_keys")
+
+
+# Concrete values that make two clauses of the same kind genuinely
+# different (a possible contradiction): amounts, percentages, durations,
+# dates, reference numbers. Only compared, never interpreted.
+_VALUE_RE = re.compile(
+    r"\d[\d.,']*\s?(?:€|eur\b|euro\b|chf\b|usd\b|\$|%)"
+    r"|(?:€|eur\b|chf\b|usd\b|\$)\s?\d[\d.,']*"
+    r"|\b\d+\s*(?:tag|woche|monat|jahr|day|week|month|year)"
+    r"|\b\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})\b|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b(?=[A-Z0-9/-]*\d)[A-Z][A-Z0-9/-]{3,}\b",
+    re.IGNORECASE,
+)
+
+
+def _values(chunk: str) -> frozenset[str]:
+    return frozenset(re.sub(r"\s+", "", match.lower()) for match in _VALUE_RE.findall(chunk))
+
+
 def score_blocks(
     text: str, blocks: list[tuple[int, int]], groups: tuple[KeywordGroup, ...]
 ) -> list[dict[str, int]]:
@@ -175,14 +205,76 @@ def score_blocks(
     scores = []
     for start, end in blocks:
         chunk = text[start:end]
-        scores.append(
-            {
-                group.name: STRONG_WEIGHT * sum(1 for p in group.strong if p.search(chunk))
-                + WEAK_WEIGHT * sum(1 for p in group.weak if p.search(chunk))
-                for group in groups
-            }
-        )
+        score = BlockScore()
+        score.strong = {}
+        score.heading_strong = {}
+        # A heading is a short first line ABOVE a body ("§ 5 Verlängerung"
+        # + clause) - a single-line block (a table row) is not a heading.
+        head_line, has_body, _ = chunk.partition("\n")
+        first_line = head_line if has_body and len(head_line) <= _HEADING_MAX_CHARS else ""
+        for group in groups:
+            strong = frozenset(index for index, p in enumerate(group.strong) if p.search(chunk))
+            score.strong[group.name] = strong
+            score.heading_strong[group.name] = frozenset(
+                index for index in strong if first_line and group.strong[index].search(first_line)
+            )
+            score[group.name] = STRONG_WEIGHT * len(strong) + WEAK_WEIGHT * sum(
+                1 for p in group.weak if p.search(chunk)
+            )
+        score.value_keys = _values(chunk)
+        scores.append(score)
     return scores
+
+
+def _coverage(
+    scores: list[dict[str, int]], group_names: tuple[str, ...], unit_values: list[frozenset[str]]
+) -> set[int]:
+    """Planner V2.1: the significant blocks that are mandatory - enough
+    evidence to cover every field group, not every strong hit.
+
+    Per group and strong pattern (e.g. "kündig", "verläng", an amount):
+    1. the pattern's best block is mandatory. Best = the earliest block
+       whose heading line names the topic ("§ 5 Verlängerung" - the clause
+       itself), otherwise the highest-scoring block (earliest on ties);
+    2. plus the next-best block that carries a concrete value (amount,
+       duration, date, reference number) the first one doesn't - compared
+       over each block's sentence unit (`unit_values`: the block plus the
+       blocks it continues into/from), so a value cut off into the next
+       block still counts - so
+       "3 Monate" vs. "6 Monate" or two different prices both reach the
+       model. Two differing values are enough for the prompt's
+       contradiction rule (null + notes); further variants are supporting.
+    Every other repeat of a covered pattern (boilerplate) is supporting.
+    Near-linear: patterns x candidates (sorted once per pattern).
+
+    Without pattern information (plain dict scores) every significant block
+    is mandatory - the Planner V2 behavior."""
+    result: set[int] = set()
+    for name in group_names:
+        candidates = [i for i, score in enumerate(scores) if score.get(name, 0) >= STRONG_WEIGHT]
+        if not all(isinstance(scores[i], BlockScore) for i in candidates):
+            result.update(candidates)
+            continue
+        by_pattern: dict[int, list[int]] = defaultdict(list)
+        for i in candidates:
+            for pattern in scores[i].strong[name]:
+                by_pattern[pattern].append(i)
+        for pattern, blocks_with_pattern in by_pattern.items():
+            ranked = sorted(
+                blocks_with_pattern,
+                key=lambda i: (
+                    pattern not in scores[i].heading_strong[name],
+                    i if pattern in scores[i].heading_strong[name] else -scores[i][name],
+                    i,
+                ),
+            )
+            first = ranked[0]
+            result.add(first)
+            for i in ranked[1:]:
+                if unit_values[i] - unit_values[first]:
+                    result.add(i)
+                    break
+    return result
 
 
 def select(
@@ -207,25 +299,28 @@ def select(
 
     Mandatory (within the hard budget, in this order):
     1. document head (master data: parties, number, subject);
-    2. significant hits (at least one strong pattern), best first,
-       interleaved across groups so no group starves the others - each with
-       its small neighbors (heading, lead-in/follow-up sentence) and any
-       block it continues into/from mid-sentence ("... beträgt" + "3 Monate
-       ...", split by segmentation);
+    2. the COVERAGE set of significant hits (Planner V2.1, see _coverage):
+       per group, the best block for each strong pattern plus one block
+       with a differing concrete value (possible contradiction) - not every
+       strong hit. Interleaved across groups, each with its minimal context
+       only: the block it continues into/from mid-sentence or mid-table
+       ("... beträgt" + "3 Monate ..."), a heading line right before it, the
+       block its lead-in (":") introduces;
     3. per group, its best weak-only hit (some fields only ever have weak
        evidence, e.g. the payment interval) - one block per group at most.
 
     Supporting:
     4. document tail (signatures, annexes) - safety net, within the hard
        budget;
-    5. other weak hits, then larger neighbors of significant hits - within
-       the soft budget and the supporting cap;
+    5. redundant strong hits (best first), small neighbors of mandatory
+       hits, other weak hits, then larger neighbors - within the soft
+       budget and the supporting cap;
     6. only if there was no hit at all: evenly spaced blocks up to the soft
        budget (no cap), a conservative sample instead of trusting keywords.
 
-    `hit_blocks`/`included_hits` count significant hits only - that is what
-    decides whether the selection is complete (otherwise the planner
-    chunks).
+    `hit_blocks`/`included_hits` count the mandatory (coverage) hits only -
+    that is what decides whether the selection is complete (otherwise the
+    planner chunks).
     """
     if not blocks:
         return Selection(text="", passage_count=0, hit_blocks=0, included_hits=0)
@@ -262,20 +357,27 @@ def select(
         ]
 
     def continuation(core: int) -> list[int]:
-        # Blocks of the same paragraph split mid-sentence belong together.
+        # Only the minimal context a hit cannot be read without, never a
+        # chain: the block it continues from/into mid-sentence or mid-table,
+        # a short heading line right before it, the block a lead-in
+        # ("... wie folgt:") introduces.
         result = []
-        if core > 0 and _continues(text, blocks, core - 1):
+        if core > 0 and (_continues(text, blocks, core - 1) or _is_heading_line(text, blocks[core - 1])):
             result.append(core - 1)
-        if core + 1 < len(blocks) and _continues(text, blocks, core):
+        if core + 1 < len(blocks) and (_continues(text, blocks, core) or text[blocks[core][1] - 1] == ":"):
             result.append(core + 1)
         return result
 
     def add_hits(cores: list[int], limit: int, *, required: bool) -> None:
         for core in cores:
             linked = [core, *continuation(core)]
-            if not try_add(linked + neighbors(core, small=True), limit, required=required):
-                if not try_add(linked, limit, required=required):
-                    try_add([core], limit, required=required)
+            if required:
+                # Mandatory: the hit and its minimal context only.
+                if not try_add(linked, limit, required=True):
+                    try_add([core], limit, required=True)
+            elif not try_add(linked + neighbors(core, small=True), limit):
+                if not try_add(linked, limit):
+                    try_add([core], limit)
 
     head_total = 0
     head_count = 0
@@ -288,7 +390,12 @@ def select(
     hits = _interleaved_hits(scores, group_names)
     significant = [i for i in hits if max(scores[i].get(name, 0) for name in group_names) >= STRONG_WEIGHT]
     significant_set = set(significant)
-    add_hits(significant, budget, required=True)
+    # Planner V2.1: only the coverage set is mandatory; redundant strong
+    # hits (same pattern, no new value) become the first supporting tier.
+    unit_values = [_unit_values(text, blocks, scores, i) for i in range(len(blocks))]
+    covering = _coverage(scores, group_names, unit_values)
+    required_hits = [i for i in significant if i in covering]
+    add_hits(required_hits, budget, required=True)
     promoted = _best_weak_only_hits(scores, group_names)
     add_hits(promoted, budget, required=True)
 
@@ -304,6 +411,11 @@ def select(
             break
         tail_total += size(index)
 
+    add_hits([i for i in significant if i not in covering], supporting_limit, required=False)
+    for core in required_hits:  # small neighbors of mandatory hits (follow-up sentence, lead-in)
+        if core in chosen:
+            for neighbor in neighbors(core, small=True):
+                try_add([neighbor], supporting_limit)
     add_hits([i for i in hits if i not in significant_set], supporting_limit, required=False)
     for core in significant:
         if core in chosen:
@@ -325,18 +437,48 @@ def select(
     return Selection(
         text=rendered,
         passage_count=_run_count(chosen),
-        hit_blocks=len(significant),
-        included_hits=sum(1 for core in significant if core in chosen),
+        hit_blocks=len(required_hits),
+        included_hits=sum(1 for core in required_hits if core in chosen),
         mandatory_chars=mandatory_chars,
         supporting_chars=sum(size(i) for i in chosen) - mandatory_chars,
+        candidate_count=len(significant),
+        mandatory_block_count=sum(1 for i in chosen if i in mandatory),
     )
 
 
 def _continues(text: str, blocks: list[tuple[int, int]], index: int) -> bool:
-    """Block `index` and the next one are one paragraph cut mid-sentence
-    (no blank line between them, no sentence end at the cut)."""
+    """Block `index` and the next one belong together: one paragraph cut
+    mid-sentence (no blank line, no sentence end at the cut), or one table
+    cut between two rows (the touching lines both look like table rows -
+    also across a blank line, so a header row keeps its value rows)."""
     end, next_start = blocks[index][1], blocks[index + 1][0]
-    return "\n\n" not in text[end:next_start] and text[end - 1] not in ".;:!?"
+    if "\n\n" not in text[end:next_start] and text[end - 1] not in ".;:!?":
+        return True
+    last_line = text[text.rfind("\n", blocks[index][0], end) + 1 : end]
+    next_end = text.find("\n", next_start, blocks[index + 1][1])
+    first_line = text[next_start : blocks[index + 1][1] if next_end == -1 else next_end]
+    return is_table_like(last_line) and is_table_like(first_line)
+
+
+def _unit_values(text: str, blocks: list[tuple[int, int]], scores: list, index: int) -> frozenset[str]:
+    """Concrete values of a block together with the blocks it continues
+    into/from (one sentence/table split by segmentation)."""
+
+    def values(i: int) -> frozenset[str]:
+        score = scores[i]
+        return score.value_keys if isinstance(score, BlockScore) else frozenset()
+
+    result = values(index)
+    if index > 0 and _continues(text, blocks, index - 1):
+        result |= values(index - 1)
+    if index + 1 < len(blocks) and _continues(text, blocks, index):
+        result |= values(index + 1)
+    return result
+
+
+def _is_heading_line(text: str, block: tuple[int, int]) -> bool:
+    chunk = text[block[0] : block[1]]
+    return "\n" not in chunk and len(chunk) <= _HEADING_MAX_CHARS and chunk[-1:] not in ".;!?"
 
 
 def _best_weak_only_hits(scores: list[dict[str, int]], group_names: tuple[str, ...]) -> list[int]:

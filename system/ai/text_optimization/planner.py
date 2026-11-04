@@ -153,6 +153,10 @@ def plan_input(
         # mandatory - the complete text).
         "mandatory_chars": sum(s.mandatory_chars for s in selections) if selections else len(normalized),
         "supporting_chars": sum(s.supporting_chars for s in selections),
+        # Planner V2.1: significant blocks found vs. blocks in the mandatory
+        # tier (summed over calls; a block can count in several chunks).
+        "mandatory_candidate_count": sum(s.candidate_count for s in selections),
+        "mandatory_block_count": sum(s.mandatory_block_count for s in selections),
         "normalization_ms": round((normalized_at - started_at) * 1000, 1),
         "optimization_ms": round((finished_at - normalized_at) * 1000, 1),
     }
