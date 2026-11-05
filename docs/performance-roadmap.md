@@ -176,7 +176,9 @@ Priority order:
 
 1. transient text normalization V2 (**done 2026-11-04**, see below);
 2. `contract_extraction` prompt V2 (**done 2026-11-04** as a clarification
-   pass; the compact restructure is still open, see below);
+   pass); prompt **V3** = the compact restructure plus field scopes for
+   contract number / ordinary notice / renewal (**done 2026-11-05**,
+   default; staging validation open, see below);
 3. expose Ollama metrics in safe logs (**token counts done 2026-11-04**:
    `prompt_eval_count`/`eval_count`; phase durations still only
    per-call internally);
@@ -490,7 +492,19 @@ Planner V2.1 staging measurements (to be filled in, contract-text-optimization.m
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | short | | | | | | | | | | | |
 | ~17k | 17,168 | 16,482 | | | | | | | | | |
-| ~78k KONE | 78,686 | 76,880 | | | | | | | | | |
+| ~78k KONE | 78,686 | 76,880 | | | 13,631 | relevance | 1 | 5,764 | 255 cold / 328 warm | ~92.0 s cold / ~20.9 s warm | fields: see below |
+
+KONE result with Planner V2.1, prompt v2 (staging):
+
+- passed the planner gate: 13,631 chars instead of 40,629; 5,764 prompt
+  tokens instead of 17,083 (and below the pre-V2 9,050); no timeout;
+- the planner is no longer the bottleneck for this contract;
+- remaining quality errors, all model-side field assignment, handled by
+  prompt v3 below:
+  - `contract_number` = the product/document title;
+  - `notice_period` = a 30-day period that is not the ordinary notice
+    (that is 90 days before expiry);
+  - `renewal_terms` = just "automatisch".
 
 KONE gate:
 - **required:** optimized far below 40,629, prompt_eval_count below
@@ -501,6 +515,41 @@ KONE gate:
 If KONE still needs 3 calls after V2.1, its unique evidence really
 exceeds one call. Record which groups cause it; then group-specific
 schemas are the next lever.
+
+### Status (2026-11-05): contract prompt v3 implemented
+
+The compact restructure planned under "Contract prompt V2" above, plus
+field scopes:
+
+- **contract_number:** only an explicitly labelled contract number. Not a
+  title/product, nor an offer/project/customer/... number.
+- **notice_period:** ordinary termination of the main contract at the end
+  of its term. Not special/extraordinary rights, offer validity or a
+  payment term.
+- **renewal_terms:** keep the stated renewal duration.
+- **main contract vs. sub-service.**
+
+Prompt overhead goes from 7,155 to 6,764 chars (~120 tokens less per call).
+Details, the runtime-override check and rollback are in
+[contract-text-optimization.md, "Prompt v3"](contract-text-optimization.md#prompt-v3-default-since-2026-11-05).
+Planner, normalization, schema, merge and models are unchanged, so v3 can
+be measured in isolation against the v2 + Planner V2.1 baseline.
+
+Prompt v3 staging comparison (to be filled in, contract-text-optimization.md
+"Staging validation" step 13):
+
+| ~78k KONE | v2 + Planner V2.1 | v3 |
+|---|---|---|
+| optimized_chars | 13,631 | |
+| ai_calls | 1 | |
+| prompt_eval_count | 5,764 | |
+| eval_count | 255 cold / 328 warm | |
+| duration | ~92.0 s cold / ~20.9 s warm | |
+| contract_number | wrong (title) | |
+| notice_period | wrong (30 Tage) | |
+| renewal_terms | partial ("automatisch") | |
+
+Accept v3 only if no field is worse than with v2.
 
 ## Better timing visibility
 

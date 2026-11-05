@@ -288,19 +288,17 @@ call_budget_chars = (context_window * 0.9 - tokens(template + context) - 512) * 
   tokenizer dependency.
 - Floor: 1,500 chars.
 
-With the default prompt **v2** and HubDix' context this gives **≈3,000
-chars per call at 4,096 tokens** and **≈14,800 at 8,192 tokens** (v1:
-≈3,300 / ≈15,100 - v2's overhead is 333 chars larger). With the larger
-window the configured `direct_limit_chars`/`target_chars`/
-`chunk_target_chars` are the effective limits, so v2 changes nothing
-there.
+With the default prompt **v3** and HubDix' context this gives **≈3,400
+chars per call at 4,096 tokens** and **≈15,200 at 8,192 tokens**. v3's
+overhead is 391 chars smaller than v2's; v2 gives ≈3,000 / ≈14,800, v1
+≈3,300 / ≈15,100. With the larger window the configured
+`direct_limit_chars`/`target_chars`/`chunk_target_chars` are the effective
+limits, so the prompt version changes nothing there.
 
-**At 4,096 tokens v2 costs ~10 % of the per-call text budget.** A
-contract of ~3,000-3,300 normalized chars, which was `direct` with v1, is
-now reduced (`relevance`). This is the unchanged budget formula applied to
-the larger prompt. Profiles that run `contract_extraction` should set
-`context_window_tokens: 8192`, as already recommended (staging `heavy`
-does).
+At 4,096 tokens the prompt size matters: v2's larger prompt cost ~10 % of
+the per-call text budget compared to v1, and v3 gives it back. Profiles
+that run `contract_extraction` should set `context_window_tokens: 8192`,
+as already recommended (staging `heavy` does).
 
 Measured on the synthetic test contracts with v1 (tests/contract_samples.py,
 keyword-dense filler, header/footer on every page; at 8,192 the v2 numbers
@@ -545,6 +543,87 @@ server:
 Check `GET /api/v1/lab/prompts/contract_extraction?version=v2` after the
 deploy: the content must contain `[Excerpt n/m]`.
 
+## Prompt v3 (default since 2026-11-05)
+
+`system/prompts/contract_extraction/v3.txt`. Since then v2 is the rollback
+and v1 the original; both are unchanged (a test pins their content).
+
+**Why.** On the real ~78k KONE contract (v2 + Planner V2.1: 1 call, 5,764
+prompt tokens) the model:
+
+- returned the document/product title as `contract_number`. The text also
+  had a separately labelled offer number;
+- took a 30-day period that did not belong to ordinary termination as
+  `notice_period`. The real clause is "90 days before the end of the
+  (initial or renewed) term";
+- reduced the renewal to "automatisch", losing "by the initial term or 2
+  years, whichever is longer".
+
+**Structure.** `ROLE` → `INPUT` (context, document text, excerpt markers,
+table gaps) → `GLOBAL RULES` → `FIELDS` → `CONTEXT` → `DOCUMENT TEXT` →
+`OUTPUT`. The output instruction now follows the document, which helps a
+small model, and the cached prompt prefix still ends right before the text.
+
+**Compaction.** Every safety rule of v2 is stated exactly once (a test
+checks each one is present exactly once):
+
+- context only disambiguates;
+- explicit evidence only, null over guess;
+- no invented values;
+- the date rules and no computed dates;
+- no legal interpretation (complex clause → text field, structured fields
+  null);
+- contradictions, also across excerpts → null + notes;
+- no status;
+- no net/gross conversion;
+- one unambiguous price;
+- no internal IDs;
+- JSON only.
+
+Per-field repetitions ("only if explicitly stated", the unit lists, the
+role examples) are gone: the FIELDS heading says once that every field is
+null unless stated. The result is 6,425 vs. 7,163 chars, 391 chars (~120
+tokens) less overhead per call, **with** the new rules below.
+
+**New field scopes**, all in the prompt, no code heuristics:
+
+| field | v3 rule |
+|---|---|
+| `contract_number` | only a value the document **explicitly labels** as the contract's number/ID (`Vertragsnummer`, `Vertrag Nr.`, `Contract No.`, `Agreement ID`). A document title, product/package name, tariff, contract type or project name is not one, and neither is a value labelled as an offer, project, order, invoice, customer, installation/serial or page number. With several identifiers only the labelled contract number counts; without one, `null`. **Changed from v1/v2:** v1 named a "customer reference number" as acceptable; a customer number no longer counts. |
+| `notice_period` | the notice for **ordinary termination of the main contract at the end of its regular (initial or renewed) term**, including the condition inside an auto-renewal clause ("verlängert sich automatisch, sofern nicht … gekündigt"). Not periods for extraordinary termination, important reason, immediate effect, force majeure, payment default, price changes, objection to changed terms, a sub-service, an offer's validity or a payment term; those may go into notes. |
+| `renewal_terms` | the automatic renewal of the main contract, keeping any stated renewal duration and its condition; never reduced to just "automatisch". A non-simple duration ("initial term or 2 years, whichever is longer") stays text; `renewal_period_value` is only filled for one plain duration, as before. |
+| main vs. sub-service | term, notice and renewal fields describe the **main** contract. Rules of a sub-service or add-on (e.g. a digital service with its own renewal/notice) don't fill them, only notes. |
+| term without end date | the schema has no term-duration field. If only a duration is stated ("3 Jahre"), `end_date` stays `null` (never computed) and the duration goes into `notes`. |
+| amount | prices of single add-on services or line items are not the contract price; otherwise unchanged. |
+
+Schema, field list, null semantics, merge and planner are unchanged.
+
+**Rollback:** `POST /api/v1/lab/prompts/contract_extraction/activate
+{"version": "v2"}`, with no redeploy.
+
+**Before deploying**, check `runtime-prompts/contract_extraction/` on the
+server, as for v2:
+
+- a Lab-saved `v3.txt` there would shadow the shipped base `v3`;
+- an `active.json` naming `v1`/`v2` keeps that version active instead of
+  the new default.
+
+After the deploy, `GET /api/v1/lab/prompts/contract_extraction?version=v3`
+must start with `ROLE`, and the analyze log line must show
+`prompt_version=v3`.
+
+**Tests** (`tests/test_contract_prompt_v3.py`) are deterministic:
+
+- the prompt: structure, field list = schema, each safety rule once, the
+  new scopes, compactness, v1/v2 pinned;
+- **evidence delivery** for the disambiguation cases, through the real
+  client and planner. The labelled clause and its look-alikes (title /
+  offer / project numbers, special terminations, offer validity, payment
+  term, sub-service) all reach the model together with the separating
+  rule.
+
+What the model then answers is the staging gate (step 13).
+
 ## Security
 
 - Document text stays untrusted data. The optimizer does not interpret it
@@ -673,6 +752,40 @@ deploy: the content must contain `[Excerpt n/m]`.
     - **always:** no field worse than the pre-V2 baseline.
 
     ~17k: still 1 call, optimized ~3-4k, no lost field. Short: `direct`.
+13. **Prompt v3 validation.** Compare against v2 + Planner V2.1 only,
+    not older planner runs. Check the runtime-prompt points under
+    "Prompt v3" first. For the KONE contract, analyze once with v3 (the
+    default), then activate `v2` in the Lab, analyze again for a same-day
+    comparison, and re-activate `v3`. Cold and warm runs differ in
+    duration only; `prompt_eval_count` is the comparable number.
+
+    | | v2 + Planner V2.1 (baseline) | v3 |
+    |---|---|---|
+    | optimized_chars | 13,631 | |
+    | ai_calls | 1 | |
+    | prompt_eval_count | 5,764 | |
+    | eval_count | 255 cold / 328 warm | |
+    | total_duration_ms | ~92,007 cold / ~20,933 warm | |
+    | contract_number | wrong (document title) | |
+    | notice_period | wrong (30 Tage) | |
+    | renewal_terms | partial ("automatisch") | |
+
+    **KONE quality gate for v3** (fields per the real document):
+    - provider: the provider GmbH;
+    - `contract_number`: `null`. Not the product title, not the offer
+      number, unless the selected text really contains an explicitly
+      labelled contract number;
+    - subject: the Care / Smart service contract, in substance;
+    - `start_date`: 2025-11-01;
+    - term 3 years: in `notes`; `end_date` stays `null` unless stated as
+      a date;
+    - `notice_period`: 90 days before expiry, not 30 days;
+    - `renewal_terms`: automatic renewal including the renewal-period rule;
+    - amount 6,999.00 EUR (net) per year, `payment_interval`: `annual`.
+
+    Accept v3 only if no field is worse than with v2. Fewer prompt tokens
+    never justify a lost field. Repeat with the ~17k and the short
+    contract.
 
 
 ## Next optimization pass (2026-11-04)

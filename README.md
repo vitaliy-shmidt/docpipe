@@ -112,7 +112,8 @@ docpipe/
 │  │  │  └─ schema.json
 │  │  ├─ contract_extraction/
 │  │  │  ├─ v1.txt
-│  │  │  ├─ v2.txt                 # default: v1 + excerpt/table/contradiction clarifications
+│  │  │  ├─ v2.txt                 # v1 + excerpt/table/contradiction clarifications (rollback)
+│  │  │  ├─ v3.txt                 # default: compact, field scopes for number/notice/renewal
 │  │  │  └─ schema.json
 │  │  └─ assistant/                # one subfolder per assistant mode, same v1.txt/active.json shape
 │  │     ├─ hotel_health_summary/v1.txt
@@ -613,7 +614,7 @@ versioned prompt template and response JSON Schema under
 |--------------------------|-------------------------|-------------------|
 | `maintenance_extraction` | `v1`                    | `vendor_name`, `service_type`, `performed_at`, `next_due_date`, `technician`, `result`, `cost`, `currency`, `notes` |
 | `inspection_extraction`  | `v1`                    | `inspection_type`, `inspection_date`, `next_due_date`, `vendor_name`, `inspector`, `result`, `defects_found`, `certificate_number`, `notes` |
-| `contract_extraction`    | `v2`                    | `vendor_name`, `contact_person`, `contract_type`, `contract_number`, `service_description`, `start_date`, `end_date`, `is_open_ended`, `notice_period`, `notice_period_value`, `notice_period_unit`, `renewal_terms`, `auto_renewal`, `renewal_period_value`, `renewal_period_unit`, `amount`, `currency`, `payment_interval`, `notes` |
+| `contract_extraction`    | `v3`                    | `vendor_name`, `contact_person`, `contract_type`, `contract_number`, `service_description`, `start_date`, `end_date`, `is_open_ended`, `notice_period`, `notice_period_value`, `notice_period_unit`, `renewal_terms`, `auto_renewal`, `renewal_period_value`, `renewal_period_unit`, `amount`, `currency`, `payment_interval`, `notes` |
 
 "Default" because the prompt *text* is no longer fixed at deploy time
 (V2.2): each mode's actually-active version is runtime-resolved on every
@@ -1036,6 +1037,15 @@ tests in `tests/test_planner_v2_1.py`: a KONE-like ~70k service contract
 with repeated boilerplate hits, contradicting notice periods and prices,
 table header/value rows, the main clause winning over look-alike special
 clauses, and the neighbor chain limit.
+
+Contract prompt v3 is covered by `tests/test_contract_prompt_v3.py`:
+
+- the prompt itself: structure, field list = schema, every safety rule
+  exactly once, the contract-number / ordinary-notice / renewal /
+  sub-service scopes, compactness vs. v2, v1/v2 pinned unchanged;
+- evidence delivery through the real client and planner for the
+  title / offer-number / special-termination / offer-validity /
+  payment-term / sub-service cases.
 
 Contract prompt v2 and Ollama token telemetry are covered by
 `tests/test_contract_prompt_v2_token_metrics.py`. It checks the v2
