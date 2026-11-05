@@ -624,6 +624,223 @@ must start with `ROLE`, and the analyze log line must show
 
 What the model then answers is the staging gate (step 13).
 
+## Quality diagnosis: v2 vs. v3 and model capability (2026-11-05)
+
+**Staging finding.** On the real ~78k KONE contract, v3 (1 call, 14,951
+chars, 6,074 prompt tokens) was not better than v2 (1 call, 13,631 chars,
+5,764 tokens):
+
+- `contract_number` was still the product title;
+- the notice was missing;
+- the renewal said only "automatisch";
+- the term showed only "Befristet";
+- the contract value showed "7,00 EUR · Monatlich".
+
+At the same time the notes listed the correct facts: start, 3-year term,
+annual invoice, 6.999,00 € net per year.
+
+### What is already established (code audit, no model needed)
+
+1. **"7,00 EUR" is HubDix's rendering of `amount` ≈ 7.**
+   - HubDix takes `round((float)amount, 2)` and formats it German-style
+     (`ContractImportService::buildSuggestions`, `importprocessing.tpl`).
+     An `amount` of **6.999** shows as exactly "7,00".
+   - That is "6.999,00 €" with the German thousands dot read as a decimal
+     point. Every prompt version (v1-v3) asks for a dot decimal
+     separator, and the schema allows any `number`.
+   - **Hypothesis H4**, checkable in the stored `ai_result_json` (see
+     runbook).
+2. **"· Monatlich" does not need a monthly price in the text.** The model
+   violates "payment_interval null if amount is null": the real ~17k
+   contract's stored v2 result has `amount: null` but
+   `payment_interval: "monthly"`. DocPipe enforces the dependent-field
+   rules deterministically only in the chunk merge, not for a single call.
+3. **A structured notice needs `notice_period_value` + `notice_period_unit`.**
+   HubDix shows a notice only when both are set; the `notice_period` text
+   is a separate text suggestion. A "missing" notice can therefore be
+   text-only:
+   - v3's notice example deliberately covers the condition inside an
+     auto-renewal clause;
+   - the global rule "complex/conditional clause → text field,
+     structured fields null" can then null the value.
+
+   Check `notice_period` vs. `notice_period_value` in the raw JSON.
+4. **A non-plain renewal period cannot be structured.** HubDix shows
+   `auto_renewal` + value/unit. "The initial term or 2 years, whichever is
+   longer" is not ONE plain duration, so by the rules of every version the
+   value stays `null` and HubDix shows only "automatisch". Whether the
+   full clause is in `renewal_terms` is only visible in the raw JSON.
+   This is a **schema/UI representation limit** before it is a model
+   error.
+5. **"Befristet" is `is_open_ended: false`.** The schema has no
+   term-duration field. "3 Jahre" can only go to `notes` (v3 says so
+   explicitly), which is where it was. Also a **schema limit**.
+6. **`contact_person` is one string,** "a named contact person on the
+   provider's side". HubDix shows it with the vendor suggestion. With
+   several provider-side names (letterhead signer, operational contacts)
+   no version has a priority rule. That is a **scope ambiguity** of
+   schema + prompt, not decidable from the code.
+7. **Planner/budget interaction.**
+   - On the real ~17k contract, v2 and v3 plan **identical** text (8,375
+     chars, measured with the diagnosis CLI); the hard budget does not
+     bind there.
+   - On KONE, `optimized_chars` differs (13,631 vs. 14,951), so the hard
+     budget **binds**. Under a binding budget, V2.1 silently drops
+     optional mandatory attachments (continuation blocks, per-group best
+     weak-only block, tail).
+   - v2 and v3 therefore did **not** see the same KONE text. The
+     end-to-end comparison mixes prompt and input; only the frozen-input
+     comparison separates them.
+
+Schema size (`python -m system.tools.contract_diagnose schema`):
+
+- 19 fields, all required and all nullable, flat (no nesting);
+- 3 enums (two units, payment interval), 3 patterns (dates, currency),
+  1 free `number` (`amount`), no descriptions;
+- 1,553 chars of schema JSON, sent as Ollama `format`.
+
+The structure is simple. The load on a 1.5B model comes from mapping
+~14k chars of evidence with many look-alikes onto 19 interdependent
+fields.
+
+### Diagnosis tool
+
+`system/tools/contract_diagnose.py` is an operator CLI, not an API: no
+endpoint, not imported by the app. It prints to stdout only; nothing is
+logged or stored; drafts are never saved; config and models stay
+unchanged.
+
+| command | answers |
+|---|---|
+| `plan --prompt vN [--probe S]… [--show-context] [--show-text]` | exactly the optimized text the model gets for that prompt (same path as `/documents/analyze`, a test pins it), the budget, and where probe strings occur in raw / normalized / sent text. Default probes cover the KONE findings generically (`vor Ablauf`, `je nachdem`, `Angebot Nr`, `Vertragspreis`, `Jahresrechnung`, `7,00`, `7:00`, `24/7`, …) |
+| `run --prompts v2,v3,v3-output-first[,file:DRAFT] --models A,B --input both [--gold FILE]` | prompt × model matrix against the configured Ollama: raw JSON, `prompt_eval_count`, `eval_count`, duration, repair/fallback, gold check. **end-to-end** = each prompt plans its own input; **frozen** = one input planned with `--frozen-from` (default v2) sent unchanged to every prompt/model |
+| `explain --result FILE` | a stored `ai_result_json` as HubDix shows it (amount rounding) plus structural findings (3-decimal amount, text-only notice, renewal without period) |
+| `schema` | schema size/complexity |
+
+The prompt source is reported as `base (repo)` or `runtime (Lab-saved)`,
+so a shadowing runtime file shows up too. `--context-window N` changes the
+window for that run only. `v3-output-first` is the only built-in
+ablation: v3 unchanged except that the OUTPUT section is moved in front
+of CONTEXT.
+
+### Staging runbook
+
+The server has a local `think: False` change in `system/services/ollama.py`.
+It is kept as is; deploying this commit must not overwrite it
+(`git stash` → pull → `git stash pop`). The tool calls Ollama through that
+same client.
+
+1. **Raw results already stored, no new run.** In the HubDix DB:
+   ```sql
+   SELECT ID, ai_prompt_version, ai_model_profile, ai_analyzed_at
+     FROM contract_import_drafts WHERE original_filename LIKE '%KONE%';
+   SELECT ai_result_json FROM contract_import_drafts WHERE ID = <id>;  -- latest analysis only
+   SELECT ID, prompt_version, model, created, ai_result_json
+     FROM doclab_runs WHERE test_case_ID = <case>;                     -- history per run
+   ```
+   Pipe each `ai_result_json` into
+   `docker compose exec -T docpipe python -m system.tools.contract_diagnose explain --result /dev/stdin`
+   to check H4 (`amount_raw` 6.999?), notice text vs. value, and the
+   renewal text vs. period.
+2. **Evidence delivery, no model.** Pipe the KONE `extracted_text` in:
+   ```sh
+   mysql … -N --raw -e "SELECT extracted_text FROM contract_import_drafts WHERE ID=<id>" \
+     | docker compose exec -T docpipe python -m system.tools.contract_diagnose \
+         plan --text - --prompt v2 --show-context
+   ```
+   Repeat with `--prompt v3`. For each field, note whether the evidence
+   is in the sent text (probe `sent` > 0):
+   - contract number: the title and `Angebot Nr` present, no
+     `Vertragsnummer`;
+   - notice: `vor Ablauf`, with `90`;
+   - renewal: `je nachdem`;
+   - price: `Vertragspreis` with `6.999,00` and `Jahresrechnung`;
+   - the look-alikes: `7:00`, `24/7`, `30 Tage`;
+   - contact names: `--probe <name>`.
+3. **Model matrix.** Run `ollama list` first, use only installed models,
+   pull nothing. Run with the gold result below:
+   ```sh
+   … | docker compose exec -T docpipe python -m system.tools.contract_diagnose run --text - \
+         --prompts v2,v3,v3-output-first --models qwen2.5:1.5b-instruct,<stronger installed model> \
+         --input both --gold /tmp/kone-gold.json --warmup
+   ```
+   A thinking model (e.g. `qwen3:4b`) depends on the server's
+   `think: False` hotfix.
+4. Record the results in performance-roadmap.md ("Quality diagnosis").
+
+### Hypotheses and their tests
+
+| # | hypothesis | test | decides |
+|---|---|---|---|
+| H1 | the 1.5B model follows the OUTPUT instruction less when it comes after the long document | frozen input, `v3` vs. `v3-output-first`, same model | prompt structure |
+| H2 | v3's larger budget gives a different input that hurts (or v2's smaller one drops evidence) | step 2 probes for v2 vs. v3; then frozen vs. end-to-end for the same prompt | planner/input (case C) |
+| H3 | the 1.5B model cannot map the evidence to fields reliably | frozen input, same prompt, 1.5B vs. stronger model | model capacity (cases A/D) |
+| H4 | "7,00" is `amount` 6.999 (thousands dot read as decimal) | `explain` on the stored result | number formatting (prompt/model) |
+| H5 | "renewal: automatisch" and "Befristet" are schema/UI representation limits, not model errors | `explain`: `renewal_terms` / `notes` contain the full clause / term? | schema/UI |
+
+### Decision matrix
+
+| case | observation | conclusion / next step |
+|---|---|---|
+| A | v3 + stronger model correct, v3 + 1.5B wrong | model capacity is the main bottleneck: evaluate a stronger `heavy` model; stop adding prompt rules |
+| B | v2 better than v3 on both models | v3 wording/structure regresses: v2 in production, small targeted v2.x change instead of a rewrite |
+| C | frozen v3 correct, end-to-end v3 wrong | the planner budget changes the evidence: examine the planner/budget interaction |
+| D | both prompts wrong on 1.5B, stronger model correct | model limit (same as A) |
+| E | stronger model wrong too | look deeper at schema/prompt semantics (notice/renewal representation, number format) |
+
+H4 and H5 are orthogonal to A-E. A confirmed H4 is a number-format issue
+on every model and prompt. A confirmed H5 means part of the "regression"
+is how the result is displayed, not what the model extracted.
+
+### Recommended gold result (KONE test case)
+
+For DocLab (gold result) and `run --gold`. Do not write it to HubDix
+automatically.
+
+```json
+{
+  "vendor_name": {"contains": ["KONE"]},
+  "contract_type": {"contains": ["Servicevertrag"]},
+  "contract_number": null,
+  "start_date": "2025-11-01",
+  "end_date": null,
+  "is_open_ended": false,
+  "notice_period": {"contains": ["90 Tage", "Ablauf"]},
+  "notice_period_value": 90,
+  "notice_period_unit": "days",
+  "renewal_terms": {"contains": ["2 Jahre", "je nachdem"]},
+  "auto_renewal": true,
+  "renewal_period_value": null,
+  "renewal_period_unit": null,
+  "amount": 6999.0,
+  "currency": "EUR",
+  "payment_interval": "annual",
+  "notes": {"contains": ["3 Jahre"]}
+}
+```
+
+Notes on the gold result:
+
+- `contract_number` is `null` because the document labels only an offer
+  number.
+- `renewal_period_value` is `null` because "the initial term or 2 years,
+  whichever is longer" is not one plain duration.
+- Whether `notice_period_value: 90` or a text-only notice is "right"
+  depends on whether the condition inside the renewal clause counts as
+  conditional (v3 says it is the notice). Decide this once in DocLab
+  before scoring.
+
+### Production recommendation (pending the matrix)
+
+**Use v2 pending the model decision.** v3 shows no measured gain on the
+gate contract and costs ~310 more prompt tokens there. It also lost the
+notice in the only real comparison. v2 is the measured baseline.
+
+Rollback is one Lab activation:
+`POST /api/v1/lab/prompts/contract_extraction/activate {"version":"v2"}`.
+It is **not** activated automatically. The final v2/v3/model decision
+follows the matrix above.
+
 ## Security
 
 - Document text stays untrusted data. The optimizer does not interpret it

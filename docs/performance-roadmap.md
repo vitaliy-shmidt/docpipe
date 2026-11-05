@@ -551,6 +551,59 @@ Prompt v3 staging comparison (to be filled in, contract-text-optimization.md
 
 Accept v3 only if no field is worse than with v2.
 
+### Prompt v3 staging result and quality diagnosis (2026-11-05)
+
+Measured on staging (KONE, Planner V2.1, `heavy` / `qwen2.5:1.5b-instruct`):
+
+| KONE ~78k | v2 | v3 | expected |
+|---|---|---|---|
+| optimized_chars | 13,631 | 14,951 | - |
+| ai_calls | 1 | 1 | - |
+| prompt_eval_count | 5,764 | 6,074 | - |
+| provider | KONE GmbH | KONE GmbH | KONE GmbH |
+| contract_number | product title (wrong) | product title (wrong) | null |
+| start | - | 01.11.2025 | 01.11.2025 |
+| term | - | "Befristet", 3 Jahre only in notes | 3 Jahre (notes) |
+| notice | 30 Tage (wrong) | missing | 90 Tage vor Ablauf |
+| renewal | "automatisch" | "automatisch" | initial term or 2 years, whichever is longer |
+| contract value | - | "7,00 EUR · Monatlich" (wrong) | 6.999,00 EUR net per year |
+
+v3 is technically stable but **no quality gain**. The notes held the
+correct facts, so the issue is field assignment, not missing text.
+
+The diagnosis is described in
+[contract-text-optimization.md, "Quality diagnosis"](contract-text-optimization.md#quality-diagnosis-v2-vs-v3-and-model-capability-2026-11-05).
+
+Established from code, without a model:
+
+- "7,00" is HubDix rounding `amount` 6.999 (hypothesis: thousands dot
+  read as decimal point);
+- "Monatlich" can come from the model violating the "interval needs an
+  amount" rule, which DocPipe enforces only in the chunk merge;
+- notice/renewal show as missing or "automatisch" when only their text
+  fields are set;
+- "Befristet" is `is_open_ended`, and the schema has no term field;
+- the KONE input differed between v2 and v3 (binding budget). The
+  end-to-end comparison mixes prompt and input.
+
+Still open (needs staging; no Ollama and no KONE text available in
+development): the stored raw JSON (H4/H5), `plan` probes for v2/v3 (H2),
+and the frozen-input matrix with a stronger installed model (H1/H3).
+
+Fill in:
+
+| run (frozen input, planned with v2) | contract_number | notice | renewal_terms | amount / interval | prompt_eval_count | eval_count | duration |
+|---|---|---|---|---|---|---|---|
+| v2 + qwen2.5:1.5b | | | | | | | |
+| v3 + qwen2.5:1.5b | | | | | | | |
+| v3-output-first + qwen2.5:1.5b | | | | | | | |
+| v2 + stronger model | | | | | | | |
+| v3 + stronger model | | | | | | | |
+
+Recommendation until then: **use v2 pending the model decision**. Rollback
+by Lab activation is not done automatically. No prompt v4; planner,
+normalization, schema, merge and models unchanged.
+
 ## Better timing visibility
 
 `OllamaClient` already reads:

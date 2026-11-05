@@ -203,3 +203,10 @@ existing logging.
 - A UI of its own inside DocPipe - HubDix's DocLab is the intended
   consumer (see `docs/staging-deployment.md` and HubDix's own
   `docs/modules/doclab.md`).
+- Returning the optimized model input or choosing another model from
+  `/lab/analyze`. For contract quality diagnosis use the operator CLI
+  `python -m system.tools.contract_diagnose` instead
+  (docs/contract-text-optimization.md "Quality diagnosis"). It
+  reconstructs the exact input, compares prompt versions/drafts on an
+  identical frozen input, and runs installed models. Output goes to
+  stdout only, with no new endpoint.

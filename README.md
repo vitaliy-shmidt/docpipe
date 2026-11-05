@@ -1038,6 +1038,16 @@ with repeated boilerplate hits, contradicting notice periods and prices,
 table header/value rows, the main clause winning over look-alike special
 clauses, and the neighbor chain limit.
 
+The contract quality diagnosis CLI (`system/tools/contract_diagnose.py`)
+is covered by `tests/test_contract_diagnose.py`:
+
+- exact reconstruction of the model input the runner sends;
+- an identical frozen input for every prompt;
+- the output-first ablation;
+- runtime-shadowing detection;
+- amount display, gold check and schema audit;
+- no document text in its output or logs unless asked.
+
 Contract prompt v3 is covered by `tests/test_contract_prompt_v3.py`:
 
 - the prompt itself: structure, field list = schema, every safety rule
