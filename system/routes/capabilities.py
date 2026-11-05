@@ -23,6 +23,7 @@ def capabilities(
     features = []
     if client.services.documents:
         features.append("extract_text")
+        features.append("convert_to_pdf")
         if settings.stirling.ocr.enabled:
             features.append("ocr_fallback")
     if client.services.ai:

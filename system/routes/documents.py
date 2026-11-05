@@ -26,6 +26,10 @@ came back with too little text (see system/text_quality.py). A technical
 failure of the first extraction (timeout, upstream down, auth failure,
 ...) never triggers OCR - that error is returned as-is. Exactly one OCR
 attempt is made; there is no retry loop and no second OCR pass.
+
+V2.1 (HubDix Contract Import ZIP) adds `/documents/convert-to-pdf`: one
+Office/text/image upload -> Stirling -> PDF bytes, re-validated before it
+is returned. Same temp-file handling and size limit as extract-text.
 """
 
 from __future__ import annotations
@@ -35,7 +39,8 @@ import os
 import tempfile
 import time
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import Response
 
 from system.auth import get_authenticated_client, require_documents_service
 from system.config import ClientConfig, Settings
@@ -46,6 +51,7 @@ from system.schemas import (
     ExtractTextData,
     ExtractTextResponse,
 )
+from system.services.stirling import CONVERSION_TARGETS
 from system.text_quality import is_text_sufficient
 
 router = APIRouter()
@@ -136,4 +142,115 @@ def extract_text(
 
     return ExtractTextResponse(
         ok=True, data=ExtractTextData(text=text, text_length=len(text), extraction_method=extraction_method)
+    )
+
+
+# Contract Import V2.1: technical conversion of one supported document to
+# PDF. No business logic - DocPipe does not know hotels, drafts or what the
+# document is for; the caller (HubDix) re-validates the PDF and decides.
+# The format is named by the caller (it validated the file first) and is
+# checked again here against the file's own magic bytes - an upload is
+# never forwarded to Stirling on the strength of a name alone.
+_FORMAT_MAGIC: dict[str, tuple[bytes, ...]] = {
+    "docx": (b"PK\x03\x04",),
+    "odt": (b"PK\x03\x04",),
+    "doc": (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",),
+    "rtf": (b"{\\rtf",),
+    "jpg": (b"\xff\xd8\xff",),
+    "jpeg": (b"\xff\xd8\xff",),
+    "png": (b"\x89PNG\r\n\x1a\n",),
+    "tif": (b"II*\x00", b"MM\x00*"),
+    "tiff": (b"II*\x00", b"MM\x00*"),
+}
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def _assert_format(source_format: str, file_bytes: bytes) -> None:
+    if source_format == "txt":
+        # Plain text has no magic: reject binary content (NUL bytes).
+        if b"\x00" in file_bytes:
+            raise DocPipeError("invalid_file", "Uploaded file is not a plain text document.")
+        return
+    if not file_bytes.startswith(_FORMAT_MAGIC[source_format]):
+        raise DocPipeError("invalid_file", "Uploaded file does not match the declared format.")
+
+
+def _normalize_text(file_bytes: bytes) -> bytes:
+    """LibreOffice guesses the encoding of a .txt file - a UTF-8 BOM makes
+    it unambiguous. Non-UTF-8 text is read as Windows-1252 (the usual
+    legacy encoding of such files) and re-encoded."""
+    if file_bytes.startswith(_UTF8_BOM):
+        return file_bytes
+    try:
+        text = file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        text = file_bytes.decode("cp1252", errors="replace")
+    return _UTF8_BOM + text.encode("utf-8")
+
+
+@router.post("/api/v1/documents/convert-to-pdf")
+def convert_to_pdf(
+    request: Request,
+    file: UploadFile = File(...),
+    source_format: str = Form(...),
+    client: ClientConfig = Depends(get_authenticated_client),
+) -> Response:
+    """Convert one Office/text/image document to PDF (binary response).
+
+    Success: 200, `Content-Type: application/pdf`, body = PDF bytes,
+    header `X-DocPipe-Source-Format`. Errors: the normal JSON error body
+    (`unsupported_format`, `invalid_file`, `file_too_large`,
+    `conversion_failed`, `upstream_unavailable`, `timeout`, ...). The upload
+    is held in a temp file for the request only and removed afterwards.
+    """
+    require_documents_service(client)
+
+    settings: Settings = request.app.state.settings
+    stirling = request.app.state.stirling_client
+    fmt = source_format.strip().lower()
+    if fmt not in CONVERSION_TARGETS:
+        raise DocPipeError("unsupported_format", "This document format cannot be converted to PDF.")
+
+    started_at = time.monotonic()
+    temp_path = _spool_upload_to_temp_file(file, settings.server.max_file_size_bytes)
+    try:
+        with open(temp_path, "rb") as fh:
+            file_bytes = fh.read()
+    finally:
+        os.remove(temp_path)
+    _assert_format(fmt, file_bytes)
+    if fmt == "txt":
+        file_bytes = _normalize_text(file_bytes)
+
+    status = "success"
+    pdf_bytes = b""
+    try:
+        pdf_bytes = stirling.convert_to_pdf(file_bytes, fmt)
+        # The converter's output is a new, untrusted input: it must be a
+        # non-empty PDF within the size limit before it is handed out.
+        if not pdf_bytes.startswith(_PDF_MAGIC):
+            raise DocPipeError("conversion_failed", "Document could not be converted.")
+        if len(pdf_bytes) > settings.server.max_file_size_bytes:
+            raise DocPipeError("file_too_large", "Converted document exceeds the maximum allowed size.")
+    except DocPipeError as exc:
+        status = exc.code
+        raise
+    finally:
+        # Metadata only - never the file name or any content.
+        logger.info(
+            "convert_to_pdf request_id=%s client_id=%s source_format=%s input_bytes=%s "
+            "output_bytes=%s status=%s duration_ms=%s",
+            getattr(request.state, "request_id", None),
+            client.client_id,
+            fmt,
+            len(file_bytes),
+            len(pdf_bytes),
+            status,
+            round((time.monotonic() - started_at) * 1000, 1),
+        )
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"X-DocPipe-Source-Format": fmt, "Cache-Control": "no-store"},
     )

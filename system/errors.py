@@ -39,6 +39,11 @@ STATUS_BY_CODE: dict[str, int] = {
     "prompt_too_large": 413,
     # Assistant routing foundation (V2.2)
     "assistant_disabled": 403,
+    # Conversion to PDF (Contract Import V2.1): a format outside the
+    # supported list, and a supported, well-formed upload the converter
+    # still could not turn into a PDF (broken/exotic document).
+    "unsupported_format": 415,
+    "conversion_failed": 422,
 }
 
 
