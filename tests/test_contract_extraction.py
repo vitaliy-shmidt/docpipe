@@ -121,7 +121,7 @@ def _analyze(client, text=SIMPLE_CONTRACT_TEXT, context=None, headers=None, mode
 def test_mode_is_registered_with_standard_profile():
     mode = get_mode(MODE)
     assert mode is not None
-    assert mode.default_prompt_version == "v2"
+    assert mode.default_prompt_version == "v3"
     assert mode.model_profile == "standard"
     assert mode.max_input_length > 0
 
@@ -132,7 +132,7 @@ def test_contract_extraction_is_not_the_assistant_contract_question_mode():
     assert get_mode("contract_question") is None
 
 
-@pytest.mark.parametrize("version", ["v1", "v2"])
+@pytest.mark.parametrize("version", ["v1", "v2", "v3"])
 def test_prompt_file_loads_and_renders(version):
     template = (PROMPTS_DIR / MODE / f"{version}.txt").read_text(encoding="utf-8")
     rendered = build_prompt(template, {"hotel_name": "Hotel Beispielhof"}, "DOC-TEXT-123")
@@ -140,7 +140,7 @@ def test_prompt_file_loads_and_renders(version):
     assert "hotel_name: Hotel Beispielhof" in rendered
 
 
-@pytest.mark.parametrize("version", ["v1", "v2"])
+@pytest.mark.parametrize("version", ["v1", "v2", "v3"])
 def test_prompt_contains_hallucination_guards(version):
     template = (PROMPTS_DIR / MODE / f"{version}.txt").read_text(encoding="utf-8")
     for phrase in (
@@ -221,7 +221,7 @@ def test_analyze_simple_contract(client):
     assert data["mode"] == MODE
     assert data["model_profile"] == "standard"
     assert data["model"] == STANDARD_MODEL
-    assert data["prompt_version"] == "v2"
+    assert data["prompt_version"] == "v3"
     assert data["result"] == SIMPLE_CONTRACT_RESULT
     # The real contract schema is what gets sent to the model.
     fake = client.fake_ollama["client"]
@@ -323,7 +323,7 @@ def test_analyze_log_line_is_metadata_only(client, caplog):
     message = record.getMessage()
     assert f"mode={MODE}" in message
     assert "model_profile=standard" in message
-    assert "prompt_version=v2" in message
+    assert "prompt_version=v3" in message
     assert "input_chars=" in message
     assert "total_duration_ms=" in message
     assert "SECRET-CONTRACT-TEXT" not in message
@@ -337,15 +337,15 @@ def test_prompt_lab_lists_contract_extraction(client):
     modes = {
         m["mode"]: m for m in client.get(LAB_LIST_URL, headers=auth_headers(LAB_KEY)).json()["data"]["modes"]
     }
-    assert modes[MODE]["active_version"] == "v2"
-    assert modes[MODE]["versions"] == ["v1", "v2"]
+    assert modes[MODE]["active_version"] == "v3"
+    assert modes[MODE]["versions"] == ["v1", "v2", "v3"]
 
 
 def test_prompt_lab_loads_contract_prompt(client):
     response = client.get(f"{LAB_LIST_URL}/{MODE}", headers=auth_headers(LAB_KEY))
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["version"] == "v2" and data["active"] is True
+    assert data["version"] == "v3" and data["active"] is True
     assert "{context_block}" in data["content"] and "{text}" in data["content"]
 
 
@@ -373,18 +373,28 @@ def test_prompt_lab_save_and_activate_is_used_by_analyze(client):
     headers = auth_headers(LAB_KEY)
     saved = client.post(
         f"{LAB_LIST_URL}/{MODE}/versions",
-        json={"version": "v3", "content": "CONTRACT-V3\n{context_block}\n{text}"},
+        json={"version": "v4", "content": "CONTRACT-V4\n{context_block}\n{text}"},
         headers=headers,
     )
     assert saved.status_code == 200
     # Saving alone must not change what /documents/analyze runs.
     client.fake_ollama["client"].result = dict(SIMPLE_CONTRACT_RESULT)
-    assert _analyze(client).json()["data"]["prompt_version"] == "v2"
-    activated = client.post(f"{LAB_LIST_URL}/{MODE}/activate", json={"version": "v3"}, headers=headers)
+    assert _analyze(client).json()["data"]["prompt_version"] == "v3"
+    activated = client.post(f"{LAB_LIST_URL}/{MODE}/activate", json={"version": "v4"}, headers=headers)
     assert activated.status_code == 200
     response = _analyze(client)
-    assert response.json()["data"]["prompt_version"] == "v3"
-    assert client.fake_ollama["client"].last_prompt.startswith("CONTRACT-V3")
+    assert response.json()["data"]["prompt_version"] == "v4"
+    assert client.fake_ollama["client"].last_prompt.startswith("CONTRACT-V4")
+
+
+def test_prompt_lab_rollback_to_v2_is_one_activation(client):
+    headers = auth_headers(LAB_KEY)
+    client.fake_ollama["client"].result = dict(SIMPLE_CONTRACT_RESULT)
+    activated = client.post(f"{LAB_LIST_URL}/{MODE}/activate", json={"version": "v2"}, headers=headers)
+    assert activated.status_code == 200
+    assert _analyze(client).json()["data"]["prompt_version"] == "v2"
+    prompt = client.fake_ollama["client"].last_prompt
+    assert "[Excerpt n/m]" in prompt and "GLOBAL RULES" not in prompt
 
 
 def test_prompt_lab_rollback_to_v1_is_one_activation(client):

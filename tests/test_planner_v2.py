@@ -344,8 +344,8 @@ def test_title_without_contract_number_is_sent_as_is_and_nothing_number_like_is_
     assert plan.strategy == STRATEGY_RELEVANCE and len(plan.calls) == 1
     assert "Muster Care Servicevertrag" in sent  # title reaches the model as the document title
     assert not re.search(r"vertrags?[- ]?(nummer|nr)", sent, re.I)  # no number label invented/added
-    # The active prompt keeps the explicit-number-only rule.
-    assert "only if explicitly printed in the document" in TEMPLATE
+    # The active prompt keeps the explicit-number-only rule (v3 wording).
+    assert "only a value the document explicitly labels as the contract's number" in TEMPLATE
     assert "never construct one" in TEMPLATE
 
 

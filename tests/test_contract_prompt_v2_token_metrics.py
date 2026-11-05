@@ -43,9 +43,12 @@ EMPTY_RESULT = {field: None for field in CONTRACT.response_schema["properties"]}
 # --- Prompt v2 -----------------------------------------------------------------
 
 
-def test_v2_is_the_default_and_v1_stays_shipped_unchanged():
-    assert CONTRACT.default_prompt_version == "v2"
-    assert "[Excerpt" not in V1  # v1 is the untouched rollback version
+def test_v2_stays_shipped_as_rollback_and_v1_unchanged():
+    # Default moved on to v3 (tests/test_contract_prompt_v3.py); v2 remains
+    # the one-activation rollback, v1 the untouched original.
+    assert CONTRACT.default_prompt_version == "v3"
+    assert (PROMPTS_DIR / MODE / "v2.txt").is_file()
+    assert "[Excerpt" not in V1
 
 
 def test_v2_explains_excerpt_markers_as_parts_of_one_contract():

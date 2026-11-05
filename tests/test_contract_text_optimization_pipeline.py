@@ -86,8 +86,10 @@ def _timeout() -> DocPipeError:
 
 
 def _document_text(prompt: str) -> str:
-    # The v1 template ends with "{text}" plus a final newline.
-    return prompt.split("DOCUMENT TEXT:\n", 1)[1].removesuffix("\n")
+    # v1/v2 end with "{text}" plus a final newline; v3 adds an OUTPUT
+    # section after the document text.
+    document = prompt.split("DOCUMENT TEXT:\n", 1)[1]
+    return document.split("\n\nOUTPUT\n", 1)[0].removesuffix("\n")
 
 
 def _many_clauses_contract(copies: int = 25) -> str:
@@ -141,10 +143,12 @@ def test_chunked_contract_runs_one_call_per_group_with_same_model_and_template()
     outcome = _run(raw, ollama)
     stats = outcome.optimization
     assert 2 <= stats["ai_calls"] == stats["chunk_count"] == len(ollama.calls) <= 3
-    prefix = build_prompt(TEMPLATE, {"document_type": "contract"}, "").removesuffix("\n")
+    # Same template around every chunk's text (v3 has an OUTPUT section after it).
+    marker = "\x00TEXT\x00"
+    prefix, suffix = build_prompt(TEMPLATE, {"document_type": "contract"}, marker).split(marker)
     for call in ollama.calls:
         assert call["model"] == PROFILE.model
-        assert call["prompt"].startswith(prefix)
+        assert call["prompt"].startswith(prefix) and call["prompt"].endswith(suffix)
         assert len(_document_text(call["prompt"])) < stats["normalized_chars"] / 2
     jsonschema.validate(outcome.result, CONTRACT.response_schema)
 
