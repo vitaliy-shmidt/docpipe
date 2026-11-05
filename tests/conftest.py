@@ -68,6 +68,11 @@ class FakeStirlingClient:
         self.second_extract_text = "ocr extracted text"
         self.extract_calls = 0
         self.ocr_calls = 0
+        # Conversion to PDF (Contract Import V2.1): `convert_mode` is a
+        # _raise_for_mode value, "conversion_failed" or "not_pdf" (Stirling
+        # answers 200 with bytes that are no PDF).
+        self.convert_mode = "success"
+        self.convert_calls: list[tuple[bytes, str]] = []
 
     def close(self) -> None:
         pass
@@ -84,6 +89,15 @@ class FakeStirlingClient:
         self.ocr_calls += 1
         _raise_for_mode(self.ocr_mode)
         return b"%PDF-1.4\nocr-output"
+
+    def convert_to_pdf(self, file_bytes: bytes, source_format: str) -> bytes:
+        self.convert_calls.append((file_bytes, source_format))
+        if self.convert_mode == "conversion_failed":
+            raise DocPipeError("conversion_failed", "Document could not be converted.")
+        if self.convert_mode == "not_pdf":
+            return b"<html>error page</html>"
+        _raise_for_mode(self.convert_mode)
+        return b"%PDF-1.7\nconverted " + source_format.encode("ascii")
 
 
 SAMPLE_MAINTENANCE_RESULT = {

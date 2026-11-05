@@ -462,6 +462,29 @@ PDFs - see "Text extraction" above. Success:
 fallback ran). Existing consumers that don't read this field are
 unaffected - nothing about the rest of the contract changed.
 
+### `POST /api/v1/documents/convert-to-pdf` — authenticated, `documents`
+
+Technical conversion of ONE Office/text/image document to PDF (HubDix
+Contract Import V2.1, ZIP import). Multipart: `file` + form field
+`source_format`, one of `docx`, `doc`, `odt`, `rtf`, `txt`, `jpg`, `jpeg`,
+`png`, `tif`, `tiff` (anything else -> `unsupported_format`, no Stirling
+call). DocPipe checks the bytes against the format (OOXML/ODF zip magic,
+OLE magic for `.doc`, `{tf`, JPEG/PNG/TIFF signatures, no NUL bytes in
+`.txt` -> otherwise `invalid_file`), sends them to Stirling under a
+server-chosen name `document.<format>` (never the client's file name) and
+re-validates the output as a PDF. `.txt` is normalised to UTF-8 with BOM
+(legacy Windows-1252 is re-encoded) so LibreOffice reads it unambiguously.
+
+Success: `200`, `Content-Type: application/pdf`, body = the PDF bytes (no
+JSON wrapper), header `X-DocPipe-Source-Format`, `Cache-Control: no-store`.
+Errors: the normal JSON error body - `unsupported_format` (415),
+`invalid_file`, `file_too_large`, `conversion_failed` (422: Stirling is up
+but could not convert this file, or returned something that is no PDF),
+`upstream_unavailable`/`timeout` (Stirling/gateway not reachable). No
+business logic: DocPipe knows nothing about hotels, drafts or what the
+document is for; one image is one PDF (no page grouping). Advertised as
+feature `convert_to_pdf` in `/capabilities` for `documents` clients.
+
 ### `POST /api/v1/documents/analyze` — authenticated, V2
 
 Only for clients with `services.ai: true`. See "AI analysis" below for
@@ -546,6 +569,8 @@ Every error, from any endpoint, has the same shape:
 | `invalid_prompt`        | 400         | Empty prompt content, or a template that fails to render |
 | `prompt_too_large`      | 413         | Prompt content/draft exceeds `prompts.max_content_length` |
 | `assistant_disabled`    | 403         | Client is known but `assistant` isn't enabled     |
+| `unsupported_format`    | 415         | `convert-to-pdf`: format outside the supported list |
+| `conversion_failed`     | 422         | `convert-to-pdf`: Stirling could not convert this file (or returned no PDF) |
 | `internal_error`        | 500         | Unexpected DocPipe-side failure                   |
 
 `model_profile_unavailable` should, in practice, never happen: the same
@@ -561,6 +586,19 @@ and `message` are always top-level.
 
 ## Stirling integration
 
+- Conversion to PDF (`/documents/convert-to-pdf`), verified against the
+  Stirling-PDF **2.14.2** source (`@ConvertApi` = `/api/v1/convert`):
+  Office/text via `POST /api/v1/convert/file/pdf` (`ConvertOfficeController`,
+  LibreOffice; the input type comes from the file name extension, OOXML/ODF
+  external references are stripped by Stirling's `OfficeDocumentSanitizer`
+  before conversion), images via `POST /api/v1/convert/img/pdf`
+  (`ConvertImgPDFController`, fields `fitOption=maintainAspectRatio`,
+  `colorType=color`, `autoRotate=false`; TIFF is recognised by the
+  `.tif`/`.tiff` name and all its pages are kept). Multipart field
+  `fileInput` in both cases. A Stirling `400/422/500` on these paths is
+  `conversion_failed` (that file), `502/503/504` and connection errors stay
+  `upstream_unavailable`. Office documents are never executed by DocPipe -
+  only Stirling's isolated LibreOffice reads them.
 - Text extraction endpoint: `POST {stirling.base_url}/api/v1/convert/pdf/text`,
   multipart field `fileInput`, form field `outputFormat=txt`, verified
   directly against the current Stirling-PDF source (`ConvertPDFToOffice`
@@ -614,6 +652,7 @@ versioned prompt template and response JSON Schema under
 |--------------------------|-------------------------|-------------------|
 | `maintenance_extraction` | `v1`                    | `vendor_name`, `service_type`, `performed_at`, `next_due_date`, `technician`, `result`, `cost`, `currency`, `notes` |
 | `inspection_extraction`  | `v1`                    | `inspection_type`, `inspection_date`, `next_due_date`, `vendor_name`, `inspector`, `result`, `defects_found`, `certificate_number`, `notes` |
+| `contract_document_classification` | `v1`          | `classification` (`contract` / `uncertain` / `not_contract`), `document_kind` and `reason_code` from fixed lists - a sorting decision for unsorted imports (HubDix ZIP import), never an extraction; the prompt prefers `uncertain` whenever in doubt; default profile `light`, max input 20,000 chars (the caller sends the beginning of the text) |
 | `contract_extraction`    | `v3`                    | `vendor_name`, `contact_person`, `contract_type`, `contract_number`, `service_description`, `start_date`, `end_date`, `is_open_ended`, `notice_period`, `notice_period_value`, `notice_period_unit`, `renewal_terms`, `auto_renewal`, `renewal_period_value`, `renewal_period_unit`, `amount`, `currency`, `payment_interval`, `notes` |
 
 "Default" because the prompt *text* is no longer fixed at deploy time
