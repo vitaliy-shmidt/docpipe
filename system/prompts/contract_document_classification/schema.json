@@ -1,0 +1,53 @@
+{
+  "type": "object",
+  "properties": {
+    "classification": {
+      "type": "string",
+      "enum": ["contract", "uncertain", "not_contract"]
+    },
+    "document_kind": {
+      "type": "string",
+      "enum": [
+        "service_contract",
+        "maintenance_contract",
+        "lease_contract",
+        "framework_agreement",
+        "license_agreement",
+        "supply_contract",
+        "contract_amendment",
+        "contract_annex",
+        "other_contract",
+        "invoice",
+        "delivery_note",
+        "offer",
+        "manual",
+        "brochure",
+        "plan",
+        "menu",
+        "letter",
+        "report",
+        "other_document",
+        "unreadable"
+      ]
+    },
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "contract_terms_detected",
+        "contract_reference_detected",
+        "amendment_detected",
+        "annex_detected",
+        "invoice_detected",
+        "delivery_note_detected",
+        "offer_detected",
+        "manual_detected",
+        "plan_detected",
+        "marketing_detected",
+        "insufficient_text",
+        "ambiguous"
+      ]
+    }
+  },
+  "required": ["classification", "document_kind", "reason_code"],
+  "additionalProperties": false
+}

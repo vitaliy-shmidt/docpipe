@@ -114,6 +114,20 @@ MODES: dict[str, Mode] = {
             "from a contract document."
         ),
     ),
+    # Contract Import V2.1 (HubDix ZIP import): is an unsorted document a
+    # contract at all? A small sorting decision (contract / uncertain /
+    # not_contract + one kind and one reason from fixed lists), never an
+    # extraction - the facts come later from contract_extraction. The
+    # prompt prefers "uncertain" (a lost contract is worse than one draft
+    # too many). Short input (the caller sends the beginning of the text),
+    # cheapest profile.
+    "contract_document_classification": _load_mode(
+        "contract_document_classification",
+        "v1",
+        20_000,
+        model_profile="light",
+        description="Classify whether a document is a contract (contract / uncertain / not_contract).",
+    ),
 }
 
 
