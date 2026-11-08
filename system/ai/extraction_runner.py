@@ -87,11 +87,17 @@ def run_extraction(
     ollama_client,
     optimization_settings: dict[str, TextOptimizationSettings],
     observed: dict | None = None,
+    prompt_version: str | None = None,
 ) -> ExtractionOutcome:
     """`observed`, if given, is filled in place with "optimization" and
     "timing" as soon as they exist - so a caller can still log sizes and
-    durations when a call fails with a DocPipeError."""
+    durations when a call fails with a DocPipeError.
+
+    `prompt_version` selects the response schema (Mode.schema_for) and the
+    planner/merge variant (OptimizableMode.for_version) - e.g. v4 adds
+    customer/site/asset fields. None = the base schema (v1-v3 shape)."""
     observed = {} if observed is None else observed
+    schema = mode.schema_for(prompt_version)
     settings = optimization_settings.get(mode.name)
     if settings is None or not settings.enabled or mode.name not in OPTIMIZABLE_MODES:
         timing: dict = {}
@@ -99,7 +105,7 @@ def run_extraction(
         observed["timing"] = timing
         result = ollama_client.generate_structured(
             build_prompt(prompt_template, context, text),
-            mode.response_schema,
+            schema,
             model=profile.model,
             timeout_seconds=profile.timeout_seconds,
             temperature=profile.temperature,
@@ -108,17 +114,19 @@ def run_extraction(
         )
         return ExtractionOutcome(result=result, optimization=None, timing=timing)
 
-    return _run_optimized(mode, prompt_template, context, text, profile, ollama_client, settings, observed)
+    optimizable = OPTIMIZABLE_MODES[mode.name].for_version(prompt_version)
+    return _run_optimized(
+        schema, optimizable, prompt_template, context, text, profile, ollama_client, settings, observed
+    )
 
 
 def _run_optimized(
-    mode, prompt_template, context, text, profile, ollama_client, settings, observed
+    schema, optimizable, prompt_template, context, text, profile, ollama_client, settings, observed
 ) -> ExtractionOutcome:
     deadline = time.monotonic() + profile.timeout_seconds
-    optimizable = OPTIMIZABLE_MODES[mode.name]
     overhead_chars = len(build_prompt(prompt_template, context, ""))
     context_window = profile.context_window_tokens or settings.assumed_context_window_tokens
-    budget = call_budget_chars(context_window, overhead_chars)
+    budget = call_budget_chars(context_window, overhead_chars, optimizable.output_reserve_tokens)
 
     plan = plan_input(text, optimizable.groups, settings, budget)
     stats = dict(plan.stats)
@@ -145,7 +153,7 @@ def _run_optimized(
         try:
             result = ollama_client.generate_structured(
                 build_prompt(prompt_template, context, call.text),
-                mode.response_schema,
+                schema,
                 model=profile.model,
                 timeout_seconds=timeout_seconds,
                 temperature=profile.temperature,
@@ -163,10 +171,12 @@ def _run_optimized(
     try:
         if plan.strategy == STRATEGY_CHUNKED:
             results = [(call.fields, run_call(call, profile.timeout_seconds)) for call in plan.calls]
-            result, conflicts = merge_results(results, mode.response_schema, optimizable.dependent_fields)
+            result, conflicts = merge_results(
+                results, schema, optimizable.dependent_fields, optimizable.list_fields
+            )
             stats["merge_conflicts"] = len(conflicts)
             try:
-                jsonschema.validate(result, mode.response_schema)
+                jsonschema.validate(result, schema)
             except jsonschema.ValidationError as exc:
                 raise DocPipeError(
                     "ai_invalid_response", "The AI model did not return a valid structured response."

@@ -33,6 +33,7 @@ the process at startup, not surface as a per-request 500.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,33 @@ class Mode:
     # Default model profile NAME for this mode (see module docstring).
     model_profile: str
     description: str = ""
+    # Versioned response schemas (contract_extraction v4): (N, schema) for
+    # every shipped `schema.vN.json`, ascending. A prompt version >= vN uses
+    # the newest such schema, every older version keeps `response_schema`
+    # (schema.json) unchanged - so a rollback to v3 also rolls back the
+    # structured-output `format` Ollama gets, byte for byte.
+    schema_versions: tuple[tuple[int, dict], ...] = ()
+
+    def schema_for(self, prompt_version: str | None) -> dict:
+        """The response schema a given prompt version is generated and
+        validated against. None (or a non-version string) = the base schema."""
+        number = version_number(prompt_version)
+        schema = self.response_schema
+        if number is None:
+            return schema
+        for minimum, versioned in self.schema_versions:
+            if number >= minimum:
+                schema = versioned
+        return schema
+
+
+_VERSION_NUMBER = re.compile(r"^v([1-9][0-9]*)$")
+_SCHEMA_FILE = re.compile(r"^schema\.v([1-9][0-9]*)\.json$")
+
+
+def version_number(prompt_version: str | None) -> int | None:
+    match = _VERSION_NUMBER.match(prompt_version) if isinstance(prompt_version, str) else None
+    return int(match.group(1)) if match else None
 
 
 def _load_mode(
@@ -55,6 +83,11 @@ def _load_mode(
 ) -> Mode:
     schema_path = PROMPTS_DIR / name / "schema.json"
     response_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    versioned = []
+    for path in (PROMPTS_DIR / name).glob("schema.v*.json"):
+        match = _SCHEMA_FILE.match(path.name)
+        if match:
+            versioned.append((int(match.group(1)), json.loads(path.read_text(encoding="utf-8"))))
     return Mode(
         name=name,
         default_prompt_version=default_prompt_version,
@@ -62,6 +95,7 @@ def _load_mode(
         max_input_length=max_input_length,
         model_profile=model_profile,
         description=description,
+        schema_versions=tuple(sorted(versioned, key=lambda item: item[0])),
     )
 
 

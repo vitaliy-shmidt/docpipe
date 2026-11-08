@@ -1,0 +1,38 @@
+{
+  "vendor_name": {
+    "contains": [
+      "Musterlift"
+    ]
+  },
+  "contract_number": "WV-2026-0815",
+  "customer_name": {
+    "contains": [
+      "Stegwiesen Pflegezentrum"
+    ]
+  },
+  "customer_address": {
+    "contains": [
+      "Stegwiesen 13",
+      "78333",
+      "Stockach"
+    ]
+  },
+  "sites": {
+    "contains": [
+      "Heimbach",
+      "78713"
+    ]
+  },
+  "assets": {
+    "contains": [
+      "FN-123 456"
+    ]
+  },
+  "start_date": "2026-01-01",
+  "end_date": "2027-12-31",
+  "notice_period_value": 3,
+  "notice_period_unit": "months",
+  "amount": 450.0,
+  "currency": "EUR",
+  "payment_interval": "monthly"
+}

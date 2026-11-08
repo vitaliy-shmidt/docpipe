@@ -1,0 +1,18 @@
+{
+  "vendor_name": {
+    "contains": [
+      "Musterlift"
+    ]
+  },
+  "customer_name": null,
+  "customer_address": null,
+  "sites": [],
+  "assets": [],
+  "start_date": "2026-01-01",
+  "end_date": "2027-12-31",
+  "notice_period_value": 3,
+  "notice_period_unit": "months",
+  "amount": 450.0,
+  "currency": "EUR",
+  "payment_interval": "monthly"
+}

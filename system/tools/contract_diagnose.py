@@ -4,7 +4,7 @@
     python -m system.tools.contract_diagnose run     --text FILE --prompts v2,v3,v3-output-first
                                                      [--models M1,M2] [--input end-to-end|frozen|both]
                                                      [--frozen-from v2] [--gold FILE] [--profile heavy]
-    python -m system.tools.contract_diagnose schema
+    python -m system.tools.contract_diagnose schema [--version v4]
     python -m system.tools.contract_diagnose explain --result FILE
 
 Inside the DocPipe container on staging:
@@ -49,7 +49,7 @@ from pathlib import Path
 
 from system.ai.extraction_runner import call_token_counts, run_extraction
 from system.ai.modes import MODES
-from system.ai.prompt_registry import PromptRegistry
+from system.ai.prompt_registry import PromptRegistry, is_valid_version_name
 from system.ai.prompting import build_prompt
 from system.ai.text_optimization.merge import merge_results
 from system.ai.text_optimization.normalize import normalize_text
@@ -112,16 +112,28 @@ def resolve_prompt(spec: str, registry: PromptRegistry, runtime_dir: Path) -> tu
     return registry.load_prompt(MODE_NAME, spec), source
 
 
+def spec_version(spec: str, draft_version: str | None) -> str | None:
+    """The version whose schema/planner a prompt spec runs with: a version
+    is itself, the ablation is v3, a file: draft uses --schema-version
+    (default: the mode's default version)."""
+    if is_valid_version_name(spec):
+        return spec
+    if spec == OUTPUT_FIRST_ABLATION:
+        return "v3"
+    return draft_version or MODES[MODE_NAME].default_prompt_version
+
+
 # --- Planning (identical to the runner) ----------------------------------------------
 
 
-def plan_for(template: str, context: dict, text: str, profile, opt_settings):
-    """Exactly the planning extraction_runner._run_optimized does."""
+def plan_for(template: str, context: dict, text: str, profile, opt_settings, version: str | None = None):
+    """Exactly the planning extraction_runner._run_optimized does (incl. the
+    version's planner groups and output reserve)."""
+    optimizable = OPTIMIZABLE_MODES[MODE_NAME].for_version(version)
     overhead = len(build_prompt(template, context, ""))
     window = profile.context_window_tokens or opt_settings.assumed_context_window_tokens
-    budget = call_budget_chars(window, overhead)
-    groups = OPTIMIZABLE_MODES[MODE_NAME].groups
-    return plan_input(text, groups, opt_settings, budget), budget, window
+    budget = call_budget_chars(window, overhead, optimizable.output_reserve_tokens)
+    return plan_input(text, optimizable.groups, opt_settings, budget), budget, window
 
 
 def probe_report(probes, raw: str, normalized: str, sent: str, context_chars: int = 0) -> list[dict]:
@@ -161,7 +173,7 @@ def _profile(settings, name: str, model: str | None, context_window: int | None 
     return profile
 
 
-def run_end_to_end(template, context, text, profile, client, settings) -> dict:
+def run_end_to_end(template, context, text, profile, client, settings, version: str | None = None) -> dict:
     observed: dict = {}
     started = time.monotonic()
     try:
@@ -174,6 +186,7 @@ def run_end_to_end(template, context, text, profile, client, settings) -> dict:
             ollama_client=client,
             optimization_settings=settings.text_optimization,
             observed=observed,
+            prompt_version=version,
         )
         result, error = outcome.result, None
     except Exception as exc:  # report, keep the matrix running
@@ -193,10 +206,13 @@ def run_end_to_end(template, context, text, profile, client, settings) -> dict:
     }
 
 
-def run_frozen(template, context, frozen_plan, profile, client) -> dict:
+def run_frozen(template, context, frozen_plan, profile, client, version: str | None = None) -> dict:
     """Sends the frozen plan's call texts unchanged - same merge as the
-    runner for chunked plans; no fallback (a timeout is reported as such)."""
+    runner for chunked plans; no fallback (a timeout is reported as such).
+    The prompt's own version decides schema and list merge."""
     mode = MODES[MODE_NAME]
+    schema = mode.schema_for(version)
+    optimizable = OPTIMIZABLE_MODES[MODE_NAME].for_version(version)
     results, timings = [], []
     started = time.monotonic()
     error = None
@@ -206,7 +222,7 @@ def run_frozen(template, context, frozen_plan, profile, client) -> dict:
             timings.append(timing)
             result = client.generate_structured(
                 build_prompt(template, context, call.text),
-                mode.response_schema,
+                schema,
                 model=profile.model,
                 timeout_seconds=profile.timeout_seconds,
                 temperature=profile.temperature,
@@ -215,9 +231,7 @@ def run_frozen(template, context, frozen_plan, profile, client) -> dict:
             )
             results.append((call.fields, result))
         if frozen_plan.strategy == STRATEGY_CHUNKED:
-            merged, _ = merge_results(
-                results, mode.response_schema, OPTIMIZABLE_MODES[MODE_NAME].dependent_fields
-            )
+            merged, _ = merge_results(results, schema, optimizable.dependent_fields, optimizable.list_fields)
         else:
             merged = results[0][1]
     except Exception as exc:
@@ -246,13 +260,21 @@ def run_frozen(template, context, frozen_plan, profile, client) -> dict:
 
 def check_against_gold(result: dict | None, gold: dict) -> dict:
     """Gold value per field: a literal (exact match, null included),
-    {"contains": [...]} (all substrings, case-insensitive) or
-    {"any_of": [...]} (one of the literals)."""
+    {"contains": [...]} (all substrings, case-insensitive; for a list/object
+    - v4 sites/assets/customer_address - checked against its JSON text),
+    {"excludes": [...]} (none of the substrings) or {"any_of": [...]}."""
     checks = {}
     for field, expected in gold.items():
         actual = None if result is None else result.get(field)
+        haystack = (
+            actual
+            if isinstance(actual, str)
+            else (json.dumps(actual, ensure_ascii=False) if isinstance(actual, (list, dict)) else None)
+        )
         if isinstance(expected, dict) and "contains" in expected:
-            ok = isinstance(actual, str) and all(s.lower() in actual.lower() for s in expected["contains"])
+            ok = haystack is not None and all(s.lower() in haystack.lower() for s in expected["contains"])
+        elif isinstance(expected, dict) and "excludes" in expected:
+            ok = not any(s.lower() in (haystack or "").lower() for s in expected["excludes"])
         elif isinstance(expected, dict) and "any_of" in expected:
             ok = actual in expected["any_of"]
         else:
@@ -368,11 +390,15 @@ def cmd_plan(args, settings, out) -> dict:
     context = json.loads(args.context)
     template, source = resolve_prompt(args.prompt, _registry(settings), Path(settings.prompts.runtime_dir))
     profile = _profile(settings, args.profile, None, args.context_window)
-    plan, budget, window = plan_for(template, context, text, profile, settings.text_optimization[MODE_NAME])
+    version = spec_version(args.prompt, args.schema_version)
+    plan, budget, window = plan_for(
+        template, context, text, profile, settings.text_optimization[MODE_NAME], version
+    )
     sent = "\n\n".join(call.text for call in plan.calls)
     report = {
         "prompt": args.prompt,
         "prompt_source": source,
+        "schema_version": version,
         "profile": args.profile,
         "context_window_tokens": window,
         "call_budget_chars": budget,
@@ -413,19 +439,27 @@ def cmd_run(args, settings, out) -> dict:
         frozen_plan = None
         if args.input in ("frozen", "both"):
             frozen_template, _ = resolve_prompt(args.frozen_from, registry, runtime_dir)
-            frozen_plan, budget, _ = plan_for(frozen_template, context, text, profile, opt)
+            frozen_plan, budget, _ = plan_for(
+                frozen_template,
+                context,
+                text,
+                profile,
+                opt,
+                spec_version(args.frozen_from, args.schema_version),
+            )
             frozen_meta = {"planned_with": args.frozen_from, "call_budget_chars": budget,
                            "optimized_chars": sum(len(c.text) for c in frozen_plan.calls)}  # fmt: skip
         for spec in prompts:
             template, source = resolve_prompt(spec, registry, runtime_dir)
+            version = spec_version(spec, args.schema_version)
             for kind in ("end-to-end", "frozen"):
                 if args.input not in (kind, "both"):
                     continue
                 for repeat in range(args.repeat):
                     if kind == "end-to-end":
-                        row = run_end_to_end(template, context, text, profile, client, settings)
+                        row = run_end_to_end(template, context, text, profile, client, settings, version)
                     else:
-                        row = run_frozen(template, context, frozen_plan, profile, client)
+                        row = run_frozen(template, context, frozen_plan, profile, client, version)
                     row = {"prompt": spec, "prompt_source": source, "model": profile.model, "input": kind,
                            "repeat": repeat + 1, **row}  # fmt: skip
                     if row["result"] is not None:
@@ -448,6 +482,9 @@ def main(argv: list[str] | None = None, out=sys.stdout) -> int:
         )
         p.add_argument("--profile", default="heavy", help="model profile from config.yaml (default: heavy)")
         p.add_argument("--context-window", type=int, help="override the profile's context window (this run)")
+        p.add_argument(
+            "--schema-version", help="schema/planner version for file: drafts (default: the mode's default)"
+        )
 
     p_plan = sub.add_parser("plan", help="show the optimized model input and probe hits")
     common(p_plan)
@@ -467,7 +504,8 @@ def main(argv: list[str] | None = None, out=sys.stdout) -> int:
     p_run.add_argument("--repeat", type=int, default=1)
     p_run.add_argument("--warmup", action="store_true", help="load each model before its first run")
 
-    sub.add_parser("schema", help="response schema size/complexity")
+    p_schema = sub.add_parser("schema", help="response schema size/complexity")
+    p_schema.add_argument("--version", help="prompt version whose schema to audit (default: base schema)")
     p_explain = sub.add_parser("explain", help="explain a stored ai_result_json")
     p_explain.add_argument("--result", required=True, help="file with the ai_result_json")
 
@@ -475,7 +513,7 @@ def main(argv: list[str] | None = None, out=sys.stdout) -> int:
     if out is sys.stdout and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # report is UTF-8 JSON on every platform
     if args.command == "schema":
-        report = schema_audit(MODES[MODE_NAME].response_schema)
+        report = schema_audit(MODES[MODE_NAME].schema_for(args.version))
     elif args.command == "explain":
         report = explain_result(json.loads(Path(args.result).read_text(encoding="utf-8")))
     else:

@@ -107,6 +107,7 @@ def analyze(
             ollama_client=request.app.state.ollama_client,
             optimization_settings=settings.text_optimization,
             observed=observed,
+            prompt_version=prompt_version,
         )
     except DocPipeError as exc:
         _log_analyze(log_fields, observed, exc.code, started_at)

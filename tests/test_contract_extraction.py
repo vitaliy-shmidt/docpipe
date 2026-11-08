@@ -338,7 +338,7 @@ def test_prompt_lab_lists_contract_extraction(client):
         m["mode"]: m for m in client.get(LAB_LIST_URL, headers=auth_headers(LAB_KEY)).json()["data"]["modes"]
     }
     assert modes[MODE]["active_version"] == "v3"
-    assert modes[MODE]["versions"] == ["v1", "v2", "v3"]
+    assert modes[MODE]["versions"] == ["v1", "v2", "v3", "v4"]
 
 
 def test_prompt_lab_loads_contract_prompt(client):
@@ -373,18 +373,18 @@ def test_prompt_lab_save_and_activate_is_used_by_analyze(client):
     headers = auth_headers(LAB_KEY)
     saved = client.post(
         f"{LAB_LIST_URL}/{MODE}/versions",
-        json={"version": "v4", "content": "CONTRACT-V4\n{context_block}\n{text}"},
+        json={"version": "v5", "content": "CONTRACT-V5\n{context_block}\n{text}"},
         headers=headers,
     )
     assert saved.status_code == 200
     # Saving alone must not change what /documents/analyze runs.
     client.fake_ollama["client"].result = dict(SIMPLE_CONTRACT_RESULT)
     assert _analyze(client).json()["data"]["prompt_version"] == "v3"
-    activated = client.post(f"{LAB_LIST_URL}/{MODE}/activate", json={"version": "v4"}, headers=headers)
+    activated = client.post(f"{LAB_LIST_URL}/{MODE}/activate", json={"version": "v5"}, headers=headers)
     assert activated.status_code == 200
     response = _analyze(client)
-    assert response.json()["data"]["prompt_version"] == "v4"
-    assert client.fake_ollama["client"].last_prompt.startswith("CONTRACT-V4")
+    assert response.json()["data"]["prompt_version"] == "v5"
+    assert client.fake_ollama["client"].last_prompt.startswith("CONTRACT-V5")
 
 
 def test_prompt_lab_rollback_to_v2_is_one_activation(client):

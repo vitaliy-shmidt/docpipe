@@ -105,6 +105,13 @@ POST /api/v1/lab/analyze
 { "mode": "maintenance_extraction", "text": "...", "context": {}, "prompt": "temporary draft..." }
 ```
 
+Optional `"schema_version": "v4"`: the version whose response schema and
+planner variant the draft runs with (a draft has no version of its own).
+Omitted = the mode's active version, i.e. unchanged behavior. Lets a
+contract_extraction v4 draft be tested while v3 is still active. Must be
+a version name (`invalid_prompt_version` otherwise); the response echoes
+it as `data.schema_version`.
+
 - Uses the request's `prompt` **only** - never the mode's active version,
   never anything persisted. `system/routes/lab.py::draft_analyze` builds
   the final prompt straight from `body.prompt`, full stop.
@@ -195,7 +202,9 @@ existing logging.
 
 ## Not implemented
 
-- Prompt schema editing (`schema.json` stays code/git-only - see the
+- Prompt schema editing (`schema.json` / `schema.vN.json` stay
+  code/git-only; `schema.vN.json` applies to version N and later - see
+  docs/contract-text-optimization.md "Prompt + schema v4"; see the
   task: "Schema-Änderungen bleiben Code-/Git-Änderungen").
 - Per-client prompt version pinning/override (every client sees the same
   active version for a mode).

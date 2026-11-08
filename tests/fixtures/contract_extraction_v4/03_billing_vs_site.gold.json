@@ -1,0 +1,22 @@
+{
+  "vendor_name": {
+    "contains": [
+      "Clean & Care"
+    ]
+  },
+  "customer_name": {
+    "contains": [
+      "Seeblick"
+    ]
+  },
+  "customer_address": {
+    "contains": [
+      "Verwaltungsweg 1"
+    ]
+  },
+  "sites": {
+    "contains": [
+      "Seeweg 9"
+    ]
+  }
+}

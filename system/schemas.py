@@ -144,6 +144,11 @@ class LabAnalyzeRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     text: str
     prompt: str
+    # Which version's response schema/planner the draft runs with (a draft
+    # has no version of its own). Omitted = the mode's active version, so
+    # an existing caller behaves exactly as before. E.g. "v4" to test a v4
+    # draft while v3 is still active. Must be a version name ("v4").
+    schema_version: str | None = None
 
 
 class LabAnalyzeData(BaseModel):
@@ -159,6 +164,8 @@ class LabAnalyzeData(BaseModel):
     result: dict[str, Any]
     # Same optional diagnostics as AnalyzeData.text_optimization.
     text_optimization: dict[str, Any] | None = None
+    # The version whose schema/planner the draft ran with.
+    schema_version: str | None = None
 
 
 class LabAnalyzeResponse(BaseModel):

@@ -624,6 +624,126 @@ must start with `ROLE`, and the analyze log line must show
 
 What the model then answers is the staging gate (step 13).
 
+## Prompt + schema v4: customer, sites, assets (2026-11-08, not yet active)
+
+`system/prompts/contract_extraction/v4.txt` + `schema.v4.json`. v4 adds four
+**document facts** for the caller's own matching (HubDix assigns a draft to
+one of its own facilities - DocPipe never sees, returns or decides an
+application ID or an assignment):
+
+| field | type | content |
+|---|---|---|
+| `customer_name` | string, max 250, or null | the customer side as written ("Auftraggeber", "Kunde", "Besteller", "Mandant", customer, client) - never the provider, never from context, no assumed role (no "operator") |
+| `customer_address` | object `{street, zip, city}` (each string or null) or null | the address stated for that customer - not automatically the place of service |
+| `sites` | array (max 10, `[]` when none) of `{name, street, zip, city}` | only explicitly labelled places of service ("Standort", "Leistungsort", "Objekt", "Liegenschaft", "Anlagenstandort", "Aufstellungsort", "Betriebsstätte", site, premises); never a company, letterhead, billing, postal or provider address |
+| `assets` | array (max 50, `[]` when none) of `{name, serial_number, location}` | individually named installations/devices; a generic word alone is none; `serial_number` only when labelled as such (Seriennummer, Ser.-Nr., Fabriknummer, Anlagen-Nr., Gerätenummer, serial number, S/N), never an offer/contract/order/customer/invoice number |
+
+All 19 v3 fields keep their schema definition and their prompt lines
+verbatim (a test checks every v3 line is in v4). Strings carry the same
+`maxLength` as the HubDix sanitizer; every nested object has
+`additionalProperties: false` and all keys required. New global rule: for
+the four fields null/`[]` beats a guess; roles only as stated; nothing from
+CONTEXT; no site from a company/letterhead/billing/postal address; no asset
+from a generic word; no number classified by its format without a label.
+Template braces: the prompt is rendered with `str.format`, so it must not
+contain `{`/`}` besides the two placeholders (an object is described as "an
+object with ...").
+
+### Versioned schema (rollback stays one activation)
+
+- `Mode.schema_for(version)`: `schema.vN.json` applies to vN and later,
+  every older version keeps `schema.json`. v1-v3 therefore send exactly the
+  same Ollama `format` as before; a v3 activation is a complete rollback.
+  A Lab-saved v5+ uses the v4 schema.
+- `OptimizableMode.for_version(version)`: v4 uses `CONTRACT_GROUPS_V4`
+  (`BASIS_V4` = BASIS + `customer_name`/`customer_address` and labelled
+  customer blocks as strong patterns; new `SITE` group for `sites`/`assets`
+  with labelled places and labelled identification numbers as strong
+  patterns, generic words like "Anlage", "Aufzug", "Objekt", "location" only
+  weak), the list merge rules and an output reserve of 768 tokens (v1-v3:
+  512, unchanged).
+- The runner gets `prompt_version` (analyze: the active version; Lab draft:
+  `schema_version` from the request, default the active version;
+  `contract_diagnose`: the spec's version, `--schema-version` for `file:`
+  drafts).
+
+### Merge
+
+Scalars as before (different values -> null + note), also for
+`customer_name` and `customer_address` - never a list of customers. `sites`
+and `assets` are **unioned** over the authoritative chunks (the SITE chunk;
+all chunks if it did not run), in call order, first occurrence wins:
+
+- sites: normalized (whitespace, case) name + street + zip + city;
+- assets: normalized serial number (without spaces, `-`, `.`, `/`, `_`,
+  upper case) if present, otherwise name + location;
+- all-null items dropped; capped at 10 / 50.
+
+### Cost
+
+At an 8k window the v4 prompt is ~1,480 chars (~460 tokens) longer and the
+output reserve 256 tokens larger: the per-call text budget drops from
+15,506 to 13,167 chars. Synthetic contracts (3k-60k) plan identically
+(same strategy, same calls, same optimized text; prompt +~475 tokens).
+**A contract where the budget binds (KONE: v3 sent 14,951 chars) gets less
+text with v4** - the staging comparison decides whether that costs quality.
+No timeout, model, profile, temperature or context window was changed.
+
+### Tests
+
+`tests/test_contract_prompt_v4.py` (deterministic): v1-v3 + `schema.json`
+pinned by hash, schema/planner per version, v4 schema (nesting, limits,
+rejections), prompt (field list = schema, every v3 line kept, new rules),
+groups/patterns, merge (union, dedupe, caps, customer conflicts), the real
+client sending the version's schema as `format`, chunked v4 run validated
+against the schema, Lab `schema_version`, analyze with v4 active and
+rollback, and a v3/v4 evidence comparison on the synthetic fixtures (8k and
+16k windows: every snippet v3 delivers, v4 delivers too).
+
+Staging fixtures with gold results: `tests/fixtures/contract_extraction_v4/`
+(`NN_name.txt`, `.context.json`, `.gold.json`): customer + site + serial
+number; no customer and no site; customer/billing address vs. place of
+service; offer/order/customer/contract numbers that must not become serial
+numbers; context hotel name that is not in the document; a ~25k contract
+with two sites and two labelled assets. `check_against_gold` now also
+checks lists/objects (`contains` on their JSON text) and `excludes`.
+
+### Staging gate and activation
+
+v4 is shipped **inactive** (`default_prompt_version` stays `v3`): the gate
+needs the real model, which only runs on the server.
+
+1. Deploy as usual (`git pull --ff-only`, `docker compose build docpipe`,
+   `docker compose up -d docpipe`). Check `runtime-prompts/contract_extraction/`
+   first: a Lab-saved `v4.txt` there would shadow the shipped v4.
+2. For each fixture and for the real KONE text, v3 vs. v4 on the
+   production path and on a frozen input:
+
+   The image contains only `system/`, so copy the fixtures in once:
+
+   ```bash
+   docker compose cp tests/fixtures/contract_extraction_v4 docpipe:/tmp/cev4
+   for f in 01_customer_site_asset 02_no_customer_no_site 03_billing_vs_site \
+            04_numbers_not_serials 05_context_hotel_not_customer 06_long_multi_site; do
+     docker compose exec -T docpipe python -m system.tools.contract_diagnose run \
+       --text /tmp/cev4/$f.txt --context "$(cat tests/fixtures/contract_extraction_v4/$f.context.json)" \
+       --gold /tmp/cev4/$f.gold.json --prompts v3,v4 --input both --frozen-from v3 --profile heavy \
+       > /tmp/cev4-$f.json
+   done
+   ```
+
+   KONE: `--text /tmp/kone.txt --gold /tmp/kone-gold.json` (the gold from
+   "Recommended gold result" plus, only if the document shows them, the
+   customer/site/asset facts - otherwise `null` / `[]`).
+3. Compare per existing field: correct / worse / better / unchanged
+   (`gold_check`, `explain`), separately for the four new fields, plus
+   `optimized_chars`, `prompt_eval_count`, `eval_count`, `duration_ms`,
+   `ai_calls`, `fallback_used`.
+4. Activate only without a visible regression on the 19 existing fields:
+   `POST /api/v1/lab/prompts/contract_extraction/activate {"version": "v4"}`.
+   Rollback: the same call with `"v3"` (prompt and schema together).
+5. Afterwards (separate commit) move `default_prompt_version` to `v4`.
+
 ## Quality diagnosis: v2 vs. v3 and model capability (2026-11-05)
 
 **Staging finding.** On the real ~78k KONE contract, v3 (1 call, 14,951

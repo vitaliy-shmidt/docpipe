@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from system.ai.extraction_runner import run_extraction
 from system.ai.modes import MODES, get_mode
+from system.ai.prompt_registry import is_valid_version_name
 from system.ai.prompting import validate_prompt_template
 from system.ai.resolver import resolve_model_profile
 from system.auth import get_authenticated_client, require_ai_service, require_prompt_lab_service
@@ -146,6 +147,17 @@ def draft_analyze(
         )
 
     profile_name, profile = resolve_model_profile(mode, client, settings)
+    # The draft's response schema / planner variant: explicitly requested
+    # version, otherwise the active one (unchanged behavior for callers that
+    # don't send schema_version). Only a well-formed version name is
+    # accepted - it selects a schema, it is never a path.
+    registry = request.app.state.prompt_registry
+    if body.schema_version is not None:
+        if not is_valid_version_name(body.schema_version):
+            raise DocPipeError("invalid_prompt_version", f"Invalid schema version: {body.schema_version!r}.")
+        schema_version = body.schema_version
+    else:
+        schema_version = registry.resolve_active_version(mode.name, mode.default_prompt_version)
     # Never the mode's active/persisted prompt - always exactly the draft
     # the client just sent (task §16/§17: this call must never touch or
     # be influenced by the active version at all). Same input handling
@@ -160,6 +172,7 @@ def draft_analyze(
         profile=profile,
         ollama_client=request.app.state.ollama_client,
         optimization_settings=settings.text_optimization,
+        prompt_version=schema_version,
     )
 
     return LabAnalyzeResponse(
@@ -172,6 +185,7 @@ def draft_analyze(
             model=profile.model,
             result=outcome.result,
             text_optimization=outcome.optimization,
+            schema_version=schema_version,
         ),
     )
 

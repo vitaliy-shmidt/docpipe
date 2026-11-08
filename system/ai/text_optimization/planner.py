@@ -50,12 +50,14 @@ def estimate_tokens(chars: int) -> int:
     return int(chars / CHARS_PER_TOKEN) + 1
 
 
-def call_budget_chars(context_window_tokens: int, prompt_overhead_chars: int) -> int:
+def call_budget_chars(
+    context_window_tokens: int, prompt_overhead_chars: int, output_reserve_tokens: int = OUTPUT_RESERVE_TOKENS
+) -> int:
     """Characters of document text one call can carry: context window minus
     prompt overhead (template + context block), output reserve and safety
-    margin."""
+    margin. The reserve is per schema (v4 answers can carry lists)."""
     usable = context_window_tokens * (1 - SAFETY_MARGIN_RATIO)
-    usable -= estimate_tokens(prompt_overhead_chars) + OUTPUT_RESERVE_TOKENS
+    usable -= estimate_tokens(prompt_overhead_chars) + output_reserve_tokens
     return max(MIN_CALL_BUDGET_CHARS, int(usable * CHARS_PER_TOKEN))
 
 

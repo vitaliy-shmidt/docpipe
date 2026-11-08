@@ -1,7 +1,8 @@
 """contract_extraction task knowledge for the text optimizer.
 
 The field groups are the contract_extraction response schema
-(system/prompts/contract_extraction/schema.json) partitioned by topic -
+(system/prompts/contract_extraction/schema.json; v4: schema.v4.json with
+CONTRACT_GROUPS_V4 below) partitioned by topic -
 `notes` belongs to no group because any passage can feed it. A test
 (tests/test_text_optimization.py) asserts these groups cover exactly the
 schema's properties, so a schema change cannot silently drift away from
@@ -22,6 +23,7 @@ use word boundaries ("term" must not match "determine"). DE + EN only.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from system.ai.text_optimization.passages import KeywordGroup
 
@@ -189,3 +191,93 @@ CONTRACT_DEPENDENT_FIELDS = {
     "currency": "amount",
     "payment_interval": "amount",
 }
+
+
+# --- Prompt/schema v4 (schema.v4.json) ----------------------------------------
+# v4 adds document facts for the caller's own matching: the customer side
+# (name + address) and explicitly named sites and assets. The v1-v3 groups
+# above stay exactly as they are (a rollback to v3 also rolls back what the
+# planner selects). v4 uses BASIS_V4 (= BASIS + the customer fields, which
+# sit in the document head next to the provider) and the new SITE group.
+
+# Labelled customer-side blocks ("Auftraggeber:", "- nachfolgend Kunde
+# genannt -"). The bare word stays weak (it appears in almost every clause).
+_CUSTOMER_LABELS = (
+    r"\b(?:auftraggeber|kunde|besteller|mandant)(?:in)?\s*:",
+    r"nachfolgend\s+(?:[„\"']\s*)?(?:auftraggeber|kunde|besteller|mandant)",
+    r"\b(?:customer|client|principal)\s*:",
+)
+
+BASIS_V4 = KeywordGroup(
+    name="basis",
+    fields=BASIS.fields + ("customer_name", "customer_address"),
+    strong=BASIS.strong + _patterns(*_CUSTOMER_LABELS),
+    weak=BASIS.weak
+    + _patterns(r"\bkunde\b", r"\bbesteller\b", r"\bmandant\b", r"\bclient\b", r"\bprincipal\b"),
+    carries_head=True,
+)
+
+# Strong: a labelled place of performance or a labelled technical
+# identification number. Weak: words that often surround them ("Anlage" is
+# also "annex" in German, "Objekt"/"location" are everyday words).
+SITE = KeywordGroup(
+    name="site",
+    fields=("sites", "assets"),
+    strong=_patterns(
+        r"leistungsort",
+        r"anlagenstandort",
+        r"aufstellungsort",
+        r"liegenschaft",
+        r"betriebsstätte",
+        r"\bstandort(?:e|adresse|anschrift)?\s*:",
+        r"\bobjekt(?:anschrift|adresse|bezeichnung)?\s*:",
+        r"objektanschrift",
+        r"serien[- ]?(?:nummer|nr\b)",
+        r"\bser\.\s?-?\s?nr\b",
+        r"fabrik(?:ations)?[- ]?(?:nummer|nr\b)",
+        r"\bfabr\.\s?-?\s?nr\b",
+        r"anlagen[- ]?(?:nummer|nr\b)",
+        r"geräte[- ]?(?:nummer|nr\b)",
+        r"\bserial (?:number|no\b)",
+        r"\bs/n\b",
+        r"\bpremises\b",
+        r"\bsite address\b",
+        r"\b(?:service|installation) location\b",
+    ),
+    weak=_patterns(
+        r"\bstandort",
+        r"\bobjekt\b",
+        r"\banlagen?\b",
+        r"\bgebäude\b",
+        r"aufzug",
+        r"\bgerät",
+        r"\bsite\b",
+        r"\blocation\b",
+        r"\bbuilding\b",
+        r"\bequipment\b",
+    ),
+)
+
+CONTRACT_GROUPS_V4 = (BASIS_V4, TERM, FINANCE, SITE)
+
+
+@dataclass(frozen=True)
+class ListMergeRule:
+    """How the chunk merge unions one array field (instead of the scalar
+    "different values -> null" rule): items are deduplicated by the
+    normalized `primary` key when an item has one, otherwise by the
+    normalized combination of `keys`; first occurrence wins, order stays
+    stable, at most `max_items` (the schema's own maxItems)."""
+
+    keys: tuple[str, ...]
+    max_items: int
+    primary: str | None = None
+
+
+CONTRACT_LIST_FIELDS_V4 = {
+    "sites": ListMergeRule(keys=("name", "street", "zip", "city"), max_items=10),
+    "assets": ListMergeRule(keys=("name", "location"), max_items=50, primary="serial_number"),
+}
+# A v4 answer can carry site/asset lists: more room for the output than the
+# 512 tokens the flat v1-v3 object needs (planner.OUTPUT_RESERVE_TOKENS).
+CONTRACT_OUTPUT_RESERVE_TOKENS_V4 = 768

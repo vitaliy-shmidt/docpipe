@@ -1,0 +1,15 @@
+{
+  "vendor_name": {
+    "contains": [
+      "Musterlift"
+    ]
+  },
+  "customer_name": null,
+  "sites": [],
+  "assets": [],
+  "notes": {
+    "excludes": [
+      "Kontextname"
+    ]
+  }
+}

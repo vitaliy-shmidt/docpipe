@@ -124,6 +124,7 @@ class FakeOllamaClient:
         self.calls = 0
         self.prompts: list[str] = []
         self.last_prompt = None
+        self.last_schema = None
         self.last_num_ctx = None
         self.last_warmup_num_ctx = None
         self.last_model = None
@@ -166,6 +167,7 @@ class FakeOllamaClient:
         self.calls += 1
         self.prompts.append(prompt)
         self.last_prompt = prompt
+        self.last_schema = schema
         self.last_num_ctx = num_ctx
         self.last_model = model
         self.last_timeout_seconds = timeout_seconds

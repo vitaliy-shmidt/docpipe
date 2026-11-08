@@ -1,0 +1,22 @@
+{
+  "vendor_name": {
+    "contains": [
+      "Klima Nord"
+    ]
+  },
+  "contract_number": "V-2026-0042",
+  "customer_name": {
+    "contains": [
+      "Beispielhof"
+    ]
+  },
+  "assets": {
+    "excludes": [
+      "A-998877",
+      "AU-55",
+      "K-4711",
+      "V-2026-0042"
+    ]
+  },
+  "sites": []
+}
