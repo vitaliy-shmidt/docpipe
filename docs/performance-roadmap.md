@@ -704,6 +704,18 @@ For contracts compare both latency and extracted business fields. A faster
 result that loses notice, renewal, provider or price information is a
 regression.
 
+## Planned next feature — Document Evidence & Source Mapping
+
+**TODO, prioritized before HubDix general entity API / UEP implementation (2026-11-17).** Pilot customer requests traceable contract extraction suggestions.
+
+- [ ] Preserve 1-based PDF page boundaries and provenance through text extraction, including scanned PDFs via existing Stirling OCR; do not rewrite persisted original text.
+- [ ] Return an optional verified page number and short verbatim source excerpt per extracted field. Match deterministically against page text; mark ambiguous or missing evidence instead of inventing pages. No extra LLM call for page lookup.
+- [ ] Preserve provenance through normalization, passage selection and chunk/merge; maintain backward compatibility for existing consumers and text-only inputs.
+- [ ] Keep feature reusable across document types; contract import in HubDix is first consumer. Test digital/scanned/mixed PDFs, duplicate passages, cross-page clauses and existing extraction regressions; document request/response and limitations together with implementation.
+- [ ] Later, independently: page navigation in HubDix, normalized bounding boxes and visual highlighting. JumpQR's overlay approach is a reference, not a text extraction implementation.
+
+First milestone is verified page references and excerpts; no coordinate implementation required for that milestone. No production changes or implementation in this planning entry.
+
 ## Out of scope for this optimization pass
 
 - RAG / embeddings / vector database;
