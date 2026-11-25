@@ -2,7 +2,7 @@
 
 Stand: 25.11.2026 · DocPipe `main` @ `c6b5397` (v0.1.0) · Status: **Audit und Vorschlag, keine Implementierung**
 
-> **Umsetzungsstand:** Phase 2.1a (`services.forms`, `POST /api/v1/documents/forms/inspect`) und 2.1b (OCR über die vorhandene Stirling-Anbindung, Vorschläge für statische Felder, OpenAPI-Snapshot) sind auf Branch `feature/forms-inspect` umgesetzt. Server laut Betreiber: Stirling-PDF v3.2.2; dessen OCR-Endpunkt und Parameter sind gegen den Quellcode des Tags geprüft; Vertrag: [docs/forms-inspect.md](../forms-inspect.md). Präzisierung gegenüber Abschnitt 5.1: `native_ref` ist die Widget-Objektreferenz (`<objnum>.<gen>`); die gemeinsame Feldidentität mehrerer Widgets trägt `field_ref`.
+> **Umsetzungsstand:** Phasen 2.1a, 2.1b und 2.2 sind auf Branch `feature/forms-inspect` umgesetzt (Abschnitt 8). Verträge: [forms-inspect.md](../forms-inspect.md), [forms-fill.md](../forms-fill.md), OpenAPI [forms.openapi.json](../openapi/forms.openapi.json). Präzisierung gegenüber Abschnitt 5.1: `native_ref` ist die Widget-Objektreferenz (`<objnum>.<gen>`), die gemeinsame Feldidentität trägt `field_ref`.
 
 Grundlage: DocPipe-Code und -Doku, PDF4Fill [ROADMAP Phase 2](https://github.com/vitaliy-shmidt/PDF4Fill/blob/main/ROADMAP.md) und [`docs/api/contracts.md`](https://github.com/vitaliy-shmidt/PDF4Fill/blob/main/docs/api/contracts.md), Stirling-PDF-Quellcode der Tags `v2.14.2` und `v3.5.0`, isolierte Tests mit synthetischen PDFs. Auf dem Server wurde nichts geändert, an DocPipe-Code und -Konfiguration ebenfalls nicht.
 
@@ -127,3 +127,30 @@ Multipart `file` (unveränderte Arbeitsvorlage) + `manifest` (JSON) + optional `
 
 ## 7. Empfohlener nächster Implementierungsschritt
 **Phase 2.1a (nach Freigabe):** Im DocPipe-Repo additiv `services.forms` (Standard `false`), `routes/forms.py` mit **nur `forms/inspect`** (native Felder, Geometrie-Normalisierung, Text/Textblöcke, Verschlüsselungs-/XFA-/Signatur-Erkennung) mit `pikepdf` und `pdfminer.six`, ohne Detection und ohne OCR. Dazu kommt ein synthetischer Referenzkorpus (gedreht 0/90/180/270, CropBox-Versatz, Mehrfach-Widgets, verschlüsselt, signiert, XFA) samt Gegenprobe gegen Stirling `form/fields-with-coordinates`. Abnahme: bestehende 748 Tests grün, `/capabilities` für Clients ohne `forms` unverändert. Danach folgen 2.1b (OCR und Kandidaten) und 2.2 (Fill).
+
+## 8. Umsetzungsstand und Roadmap (Stand 25.11.2026)
+
+| Phase | Inhalt | Stand |
+|---|---|---|
+| 2.0 | Capability Audit (dieses Dokument) | erledigt |
+| 2.1a | `services.forms` (Standard aus), `forms/inspect`: native Felder, Text, Geometrie, Sicherheit | umgesetzt, getestet |
+| 2.1b | OCR über die vorhandene Stirling-Anbindung (v3.2.2 geprüft), Feldvorschläge für statische PDFs, OpenAPI-Snapshot | umgesetzt, getestet (synthetisch) |
+| 2.2 | `forms/fill`: native und freie Felder, Unicode-Schriften (Liberation, OFL), Auto-Fit, Überlauf als Fehler, Checkbox/Radio, PNG-Bilder, flache Ausgabe, Verschlüsselung erhalten, Signaturen/XFA/Rechte | umgesetzt, getestet (synthetisch, visuell mit PDFium) |
+
+Abweichungen von Abschnitt 5.2 (bewusst): Text nativer Felder wird über den
+Rahmen des Widgets gezeichnet, dessen alter variabler Text entfernt wird (statt
+das Widget zu entfernen); Checkbox/Radio nutzen die Appearance-Zustände der
+Vorlage (Vektorzeichen nur als Rückfall); die Ausgabe-Verschlüsselung entspricht
+immer der Vorlage (Ausgabe-Passwörter bleiben Post-MVP). Fehler tragen ein
+zusätzliches `details`-Objekt nur bei den Forms-Endpunkten.
+
+Offen (jeweils eigene Freigabe):
+1. Staging-Test mit echtem Stirling 3.2.2 (welcher OCR-Pfad aktiv ist) und
+   echten Formularen; Referenzkorpus zur Messung der Erkennungsqualität.
+2. Docker-Build mit den neuen Abhängigkeiten (pikepdf, pdfminer.six,
+   reportlab, Pillow) und den gebündelten Schriften; Stirling-Version im
+   Compose-File fixieren (derzeit `latest`).
+3. PDF4Fill-Client in der Server-`config.yaml` (Betreiber; DocPipe-Neustart
+   unterbricht HubDix kurz).
+4. Merge nach `main` und Deployment.
+5. Post-MVP: Ausgabe-Passwort, nicht-flache Ausgabe, Linien-Erkennung in Scans.

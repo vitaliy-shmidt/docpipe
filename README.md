@@ -51,6 +51,12 @@ engine or model provider sits behind it, or how to talk to it.
   Stirling) for pages without a text layer, SHA-256, encryption/XFA/signature
   detection (Phase 2.1a/2.1b, separate `forms` opt-in - see
   [docs/forms-inspect.md](docs/forms-inspect.md))
+- Filling PDF form templates for PDF4Fill: native fields by their inspect
+  identity, freely placed fields and PNG signatures/stamps, bundled Unicode
+  fonts with colour, alignment, multiline and auto-fit, overflow and
+  unprintable characters as errors (never truncated), flattened print-ready
+  output that keeps the template's encryption (Phase 2.2, same `forms`
+  opt-in - see [docs/forms-fill.md](docs/forms-fill.md))
 - A normalized, stable success/error response contract across all of the above
 - Per-client service flags loaded from a local config file (no database)
 
@@ -65,7 +71,8 @@ engine or model provider sits behind it, or how to talk to it.
 - No automatic document classification
 - No database, no persistent jobs, no background queue
 - No quotas, plans, usage tracking, or billing
-- No form filling yet (Phase 2.2), and no image-based line detection on
+- No interactive (non-flattened) filled output and no output passwords yet;
+  no changes to signed or certified PDFs; no image-based line detection on
   scans - `forms/inspect` proposes static fields from vector graphics and
   text only, and never adopts a proposal by itself
 - No user management, no web UI
@@ -449,10 +456,10 @@ capability, not a per-client flag). `prompt_lab` and `assistant` are both
 independent opt-ins from `ai` - a client needs the matching flag even if
 it already has `ai: true`.
 
-A client with `services.forms: true` (Phase 2.1a/2.1b) additionally gets
-`services.forms`, the features `forms_inspect`, `forms_detect` and (only with
-`stirling.ocr.enabled`) `forms_ocr`, and a `forms` block (`schema_version`,
-`max_pages`, `max_fields`, `max_ocr_pages`). For every other client the
+A client with `services.forms: true` (Phase 2.1a-2.2) additionally gets
+`services.forms`, the features `forms_inspect`, `forms_detect`, `forms_fill` and
+(only with `stirling.ocr.enabled`) `forms_ocr`, and a `forms` block (`schema_version`,
+`max_pages`, `max_fields`, `max_ocr_pages`, `fonts`, `max_images`). For every other client the
 body is exactly as shown above - no `forms` key at all.
 
 ### `POST /api/v1/documents/extract-text` — authenticated
@@ -517,7 +524,25 @@ Stirling OCR call (only those pages, at most `forms.max_ocr_pages`; OCR
 output is mapped onto the template only when its geometry matches, else a
 warning). An OCR failure is a warning, not an error. `Cache-Control:
 no-store`. Full contract: [docs/forms-inspect.md](docs/forms-inspect.md);
-OpenAPI 3.1: [docs/openapi/forms-inspect.openapi.json](docs/openapi/forms-inspect.openapi.json).
+OpenAPI 3.1: [docs/openapi/forms.openapi.json](docs/openapi/forms.openapi.json).
+
+### `POST /api/v1/documents/forms/fill` — authenticated, `forms`
+
+Phase 2.2 (PDF4Fill). Multipart `file` (the unchanged template), `manifest`
+(JSON: SHA-256 of the template, fields in `native` mode by `native_ref` or
+in `overlay` mode by page + position, values, resolved styles), optional
+`password` and repeated `images` parts (PNG; file name = `image_ref`).
+Returns the filled, **flattened** PDF (`application/pdf`, `Cache-Control:
+no-store`): native text drawn with the bundled fonts on top of the field's
+own border, checkboxes/radios via the template's appearance states, images
+fitted proportionally, all positions as inspect reports them (CropBox and
+rotation applied). Overflow, unprintable characters, unknown or
+conflicting fields, wrong options and protection problems are structured
+errors with `details` (field id/reason - never values). Encrypted templates
+keep their encryption; signed/certified PDFs are refused. `output.preview`
+is the same rendering plus a watermark. Runs in-process (pikepdf,
+reportlab, Pillow); no Stirling call. Full contract:
+[docs/forms-fill.md](docs/forms-fill.md).
 
 ### `POST /api/v1/documents/analyze` — authenticated, V2
 
@@ -610,6 +635,16 @@ Every error, from any endpoint, has the same shape:
 | `password_required`     | 422         | `forms/inspect`: the PDF needs an open password and none was sent |
 | `invalid_password`      | 422         | `forms/inspect`: the supplied password does not open the PDF |
 | `xfa_unsupported`       | 422         | `forms/inspect`: dynamic XFA form (no usable AcroForm) |
+| `invalid_manifest`      | 400         | `forms/fill`: manifest schema or consistency error |
+| `invalid_image`         | 400         | `forms/fill`: image part is no readable PNG / bad name |
+| `hash_mismatch`         | 409         | `forms/fill`: template does not match the manifest's sha256 |
+| `permission_denied`     | 422         | `forms/fill`: PDF permissions forbid filling/changing |
+| `signature_conflict`    | 422         | `forms/fill`: signed or certified PDF |
+| `unknown_field`, `field_conflict`, `invalid_geometry`, `invalid_value`, `text_overflow`, `unsupported_characters` | 422 | `forms/fill`: see docs/forms-fill.md |
+
+Errors of the forms endpoints may carry an additional `details` object
+(field id, reason, permission, manifest path - never submitted values).
+Every other endpoint's error body is unchanged.
 | `internal_error`        | 500         | Unexpected DocPipe-side failure                   |
 
 `model_profile_unavailable` should, in practice, never happen: the same
@@ -999,6 +1034,9 @@ wording, or provider details - see "Multi-project design" above.
 
 ## Files & security
 
+- Bundled third-party fonts: `system/forms/fonts/` (Liberation Sans/Serif/
+  Mono 2.1.5, SIL Open Font License 1.1 - `LICENSE` and `AUTHORS` there),
+  used only by `forms/fill` and embedded as subsets into its output.
 - Uploads are validated by content, not extension: the first bytes must
   be a real PDF signature (`%PDF-`).
 - Each upload is written to a temp file with a random name (`tempfile.mkstemp`) —
@@ -1042,6 +1080,11 @@ filename, AI prompts, or AI output.
 input size, page/native-field/proposal/warning counts, OCR status and OCR'd
 page count, encrypted/xfa/signed flags, status and duration - never field
 names, labels, page or OCR text, or the password.
+
+`/documents/forms/fill` logs one `forms_fill` line per request with
+input/output size, pages, native/overlay field and image counts, preview,
+encrypted, status and duration - never field ids, values, file names,
+images or the password.
 
 ## Tests
 
@@ -1186,6 +1229,16 @@ with 8 fields and 5 decoys in five display-identical variants (plain,
 confidence and labels, native widgets suppressing proposals, the route
 options, and real responses validated against the committed OpenAPI
 snapshot (which must match the running app).
+
+Forms fill (Phase 2.2, `tests/test_forms_fill.py`): visual tests render the
+output with PDFium (`pypdfium2`, dev dependency) and measure where ink
+lands - text in its field, alignment, colour, upright text and images on
+pages rotated 0/90/180/270, CropBox offsets, proportional images with
+transparency, checkbox/radio states and vector marks, kept borders,
+multi-widget and hidden widgets; plus Unicode/unsupported characters,
+auto-fit and overflow, every validation error and conflict, preserved
+encryption, signatures, XFA, determinism, preview = final + watermark,
+route, temp-file cleanup and log content.
 
 ## Not implemented (by design)
 

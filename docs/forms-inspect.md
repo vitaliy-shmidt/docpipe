@@ -4,15 +4,15 @@
 template: native form fields, proposals for input fields on static pages,
 page text with positions (OCR for pages without a text layer), the template's
 SHA-256 and its security properties. It is the first half of the PDF4Fill
-integration (fill follows in Phase 2.2). Design and the reasons for running
+integration; filling is [`forms/fill`](forms-fill.md) (Phase 2.2). Design and the reasons for running
 in-process instead of via Stirling's form endpoints:
 [architecture/pdf4fill-capability-audit.md](architecture/pdf4fill-capability-audit.md).
 
 Machine-readable contract (OpenAPI 3.1, extract of DocPipe's generated
-document): [openapi/forms-inspect.openapi.json](openapi/forms-inspect.openapi.json).
+document): [openapi/forms.openapi.json](openapi/forms.openapi.json).
 
-Not part of this phase: filling, image-based line detection on scans,
-per-client limits or usage statistics.
+Not part of this endpoint: filling (see [forms-fill.md](forms-fill.md)), image-based
+line detection on scans, per-client limits or usage statistics.
 
 ## Access
 
@@ -33,11 +33,13 @@ before and its `/capabilities` body is unchanged (no `forms` key at all).
 Calling the endpoint without the flag -> `403 forms_disabled`.
 
 For a client with `forms: true`, `/capabilities` additionally contains
-`services.forms: true`, the features `forms_inspect`, `forms_detect` and -
-only if `stirling.ocr.enabled` - `forms_ocr`, plus:
+`services.forms: true`, the features `forms_inspect`, `forms_detect`, `forms_fill`
+and - only if `stirling.ocr.enabled` - `forms_ocr`, plus:
 
 ```json
-"forms": {"schema_version": "1", "max_pages": 200, "max_fields": 2000, "max_ocr_pages": 20}
+"forms": {"schema_version": "1", "max_pages": 200, "max_fields": 2000, "max_ocr_pages": 20,
+          "fonts": {"sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"},
+          "max_images": 10}
 ```
 
 ## Request
@@ -287,7 +289,7 @@ Unknown keys, non-integers and values <= 0 are rejected at startup
 
 ## OpenAPI
 
-`docs/openapi/forms-inspect.openapi.json` is generated from the running
+`docs/openapi/forms.openapi.json` is generated from the running
 application (`python -m system.tools.export_forms_openapi`); the response
 models live in `system/forms/schemas.py`. Tests fail when the committed file
 is outdated, and validate real responses (native, detected, OCR, encrypted,

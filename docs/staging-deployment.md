@@ -307,6 +307,13 @@ PDF4Fill, measure one multi-page scan through `forms/inspect` with
 `docker stats` running and lower `forms.max_ocr_pages` if Stirling's RAM
 peak leaves too little headroom; `ocr=off` per request skips OCR entirely.
 
+`forms/fill` (Phase 2.2) runs entirely inside the DocPipe process (no
+Stirling call): pikepdf, reportlab and Pillow, with the bundled fonts from
+the image (`system/forms/fonts/`). Its cost is CPU and transient RAM in
+the DocPipe container proportional to page count and image size (images
+are capped at 25 megapixels); measure one large template with images via
+`docker stats` for the DocPipe container before enabling it.
+
 ## Parallelism
 
 Staging validation should assume **one AI request at a time** and load
