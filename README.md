@@ -44,6 +44,10 @@ engine or model provider sits behind it, or how to talk to it.
   `contract_extraction` (normalization, relevant-passage selection, chunked
   extraction for very long contracts) - the AI input only, never the stored
   text (see [docs/contract-text-optimization.md](docs/contract-text-optimization.md))
+- Structural inspection of PDF form templates for PDF4Fill: native fields,
+  page text with positions in one normalized coordinate system, SHA-256,
+  encryption/XFA/signature detection (Phase 2.1a, separate `forms` opt-in -
+  see [docs/forms-inspect.md](docs/forms-inspect.md))
 - A normalized, stable success/error response contract across all of the above
 - Per-client service flags loaded from a local config file (no database)
 
@@ -58,6 +62,8 @@ engine or model provider sits behind it, or how to talk to it.
 - No automatic document classification
 - No database, no persistent jobs, no background queue
 - No quotas, plans, usage tracking, or billing
+- No form filling yet, and no detection of empty areas in static/scanned
+  PDFs - `forms/inspect` reports native fields only (Phase 2.1a)
 - No user management, no web UI
 - No persistence of uploaded documents — every request is processed
   in a temp file that is deleted immediately afterwards
@@ -439,6 +445,11 @@ capability, not a per-client flag). `prompt_lab` and `assistant` are both
 independent opt-ins from `ai` - a client needs the matching flag even if
 it already has `ai: true`.
 
+A client with `services.forms: true` (Phase 2.1a) additionally gets
+`services.forms`, the feature `forms_inspect` and a `forms` block
+(`schema_version`, `max_pages`, `max_fields`). For every other client the
+body is exactly as shown above - no `forms` key at all.
+
 ### `POST /api/v1/documents/extract-text` — authenticated
 
 Multipart upload, field name `file`. Accepts `application/pdf` only
@@ -469,7 +480,8 @@ Contract Import V2.1, ZIP import). Multipart: `file` + form field
 `source_format`, one of `docx`, `doc`, `odt`, `rtf`, `txt`, `jpg`, `jpeg`,
 `png`, `tif`, `tiff` (anything else -> `unsupported_format`, no Stirling
 call). DocPipe checks the bytes against the format (OOXML/ODF zip magic,
-OLE magic for `.doc`, `{tf`, JPEG/PNG/TIFF signatures, no NUL bytes in
+OLE magic for `.doc`, `{
+tf`, JPEG/PNG/TIFF signatures, no NUL bytes in
 `.txt` -> otherwise `invalid_file`), sends them to Stirling under a
 server-chosen name `document.<format>` (never the client's file name) and
 re-validates the output as a PDF. `.txt` is normalised to UTF-8 with BOM
@@ -484,6 +496,17 @@ but could not convert this file, or returned something that is no PDF),
 business logic: DocPipe knows nothing about hotels, drafts or what the
 document is for; one image is one PDF (no page grouping). Advertised as
 feature `convert_to_pdf` in `/capabilities` for `documents` clients.
+
+### `POST /api/v1/documents/forms/inspect` — authenticated, `forms`
+
+Phase 2.1a (PDF4Fill). Multipart `file` (PDF) + optional `password`.
+Returns native form fields (one entry per widget), page text and text
+blocks, all positions in one system (points, visible page = CropBox,
+origin top-left, page from 1, rotation applied), the SHA-256 of the upload,
+security facts (encryption, permissions, signatures, XFA) and warnings.
+Runs in-process with pikepdf and pdfminer.six; no Stirling call, no OCR.
+`Cache-Control: no-store`. Full contract, warning and error codes:
+[docs/forms-inspect.md](docs/forms-inspect.md).
 
 ### `POST /api/v1/documents/analyze` — authenticated, V2
 
@@ -571,6 +594,11 @@ Every error, from any endpoint, has the same shape:
 | `assistant_disabled`    | 403         | Client is known but `assistant` isn't enabled     |
 | `unsupported_format`    | 415         | `convert-to-pdf`: format outside the supported list |
 | `conversion_failed`     | 422         | `convert-to-pdf`: Stirling could not convert this file (or returned no PDF) |
+| `forms_disabled`        | 403         | Client is known but `forms` isn't enabled         |
+| `limit_exceeded`        | 413         | `forms/inspect`: more pages/fields than `forms.max_pages`/`max_fields` |
+| `password_required`     | 422         | `forms/inspect`: the PDF needs an open password and none was sent |
+| `invalid_password`      | 422         | `forms/inspect`: the supplied password does not open the PDF |
+| `xfa_unsupported`       | 422         | `forms/inspect`: dynamic XFA form (no usable AcroForm) |
 | `internal_error`        | 500         | Unexpected DocPipe-side failure                   |
 
 `model_profile_unavailable` should, in practice, never happen: the same
@@ -999,6 +1027,10 @@ Never logged: API keys, the `Authorization` header, the Stirling/Ollama
 API keys, document contents/text (extracted or OCR'd), the uploaded
 filename, AI prompts, or AI output.
 
+`/documents/forms/inspect` logs one `forms_inspect` line per request with
+input size, page/field/warning counts, encrypted/xfa/signed flags, status
+and duration - never field names, page text or the password.
+
 ## Tests
 
 ```bash
@@ -1121,6 +1153,15 @@ If you do have real Stirling/Ollama instances available locally, a
 manual end-to-end check with an actual PDF and a few real documents per
 AI mode is worthwhile before deploying — see
 [docs/staging-deployment.md](docs/staging-deployment.md) for a checklist.
+
+Forms inspect (Phase 2.1a, `tests/test_forms_inspect.py`): field types and
+attributes, hand-computed positions for 0/90/180/270 and inherited rotation,
+CropBox/MediaBox offsets and clipping, text blocks in the same coordinate
+system, encryption/permissions/signatures/XFA, limits, broken input, the
+`forms` permission, metadata-only logging, temp-file cleanup and the
+unchanged `/capabilities` body for clients without `forms`. Reads the
+synthetic reference PDFs in `tests/fixtures/forms/` (generator
+`python -m tests.forms_fixtures`).
 
 ## Not implemented (by design)
 

@@ -136,6 +136,12 @@ text_optimization:
     primary_timeout_ratio: 0.65   # first call's share of the profile timeout
     assumed_context_window_tokens: 4096   # for profiles without context_window_tokens
 
+# Optional (Phase 2.1a) - technical safety limits of /documents/forms/inspect
+# (not quotas). Omit this whole block for the defaults shown here.
+forms:
+  max_pages: 200
+  max_fields: 2000
+
 clients:
   demo-client:
     enabled: true
@@ -149,6 +155,10 @@ clients:
       # (e.g. HubDix's DocLab), never to an ordinary integration client.
       prompt_lab: true
       assistant: true
+      # Optional (Phase 2.1a, PDF4Fill) - /documents/forms/inspect. A separate
+      # opt-in, default false; see docs/forms-inspect.md. Grant it only to the
+      # PDF4Fill client, not to existing integrations.
+      forms: false
 
     # Optional per-client override: mode name -> model PROFILE name only
     # (never a raw model name). Omit entirely to use each mode's built-in
