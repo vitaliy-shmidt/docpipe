@@ -154,3 +154,7 @@ Offen (jeweils eigene Freigabe):
    unterbricht HubDix kurz).
 4. Merge nach `main` und Deployment.
 5. Post-MVP: Ausgabe-Passwort, nicht-flache Ausgabe, Linien-Erkennung in Scans.
+6. Limits und Nutzungsstatistik je Client (Abschnitt 4): inzwischen in
+   [performance-roadmap.md](../performance-roadmap.md), "Mandatory usage and budget
+   enforcement", allgemein für DocPipe-Clients geplant (dort noch als "PDF2Fill"
+   bezeichnet); `forms/*` hat bis dahin nur die technischen `forms.*`-Grenzen.
