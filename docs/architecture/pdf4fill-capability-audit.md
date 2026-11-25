@@ -2,7 +2,7 @@
 
 Stand: 25.11.2026 · DocPipe `main` @ `c6b5397` (v0.1.0) · Status: **Audit und Vorschlag, keine Implementierung**
 
-> **Umsetzungsstand:** Phase 2.1a (`services.forms`, `POST /api/v1/documents/forms/inspect` ohne OCR und ohne Feld-Erkennung) ist auf Branch `feature/forms-inspect` umgesetzt; Vertrag: [docs/forms-inspect.md](../forms-inspect.md). Präzisierung gegenüber Abschnitt 5.1: `native_ref` ist die Widget-Objektreferenz (`<objnum>.<gen>`); die gemeinsame Feldidentität mehrerer Widgets trägt `field_ref`.
+> **Umsetzungsstand:** Phase 2.1a (`services.forms`, `POST /api/v1/documents/forms/inspect`) und 2.1b (OCR über die vorhandene Stirling-Anbindung, Vorschläge für statische Felder, OpenAPI-Snapshot) sind auf Branch `feature/forms-inspect` umgesetzt. Server laut Betreiber: Stirling-PDF v3.2.2; dessen OCR-Endpunkt und Parameter sind gegen den Quellcode des Tags geprüft; Vertrag: [docs/forms-inspect.md](../forms-inspect.md). Präzisierung gegenüber Abschnitt 5.1: `native_ref` ist die Widget-Objektreferenz (`<objnum>.<gen>`); die gemeinsame Feldidentität mehrerer Widgets trägt `field_ref`.
 
 Grundlage: DocPipe-Code und -Doku, PDF4Fill [ROADMAP Phase 2](https://github.com/vitaliy-shmidt/PDF4Fill/blob/main/ROADMAP.md) und [`docs/api/contracts.md`](https://github.com/vitaliy-shmidt/PDF4Fill/blob/main/docs/api/contracts.md), Stirling-PDF-Quellcode der Tags `v2.14.2` und `v3.5.0`, isolierte Tests mit synthetischen PDFs. Auf dem Server wurde nichts geändert, an DocPipe-Code und -Konfiguration ebenfalls nicht.
 

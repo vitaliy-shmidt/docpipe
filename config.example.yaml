@@ -141,6 +141,8 @@ text_optimization:
 forms:
   max_pages: 200
   max_fields: 2000
+  # Phase 2.1b: pages per request sent to Stirling OCR (shared with other clients)
+  max_ocr_pages: 20
 
 clients:
   demo-client:

@@ -298,6 +298,15 @@ staging test, not just at idle. The AI model does not need to be loaded
 for an OCR test, so OCR and AI load can be measured independently rather
 than assumed additive.
 
+PDF4Fill's `forms/inspect` (Phase 2.1b) uses the same Stirling OCR call
+for pages without a text layer - the same Stirling instance HubDix's
+extract-text relies on. It sends only those pages, at most
+`forms.max_ocr_pages` (default 20) per request, with the shared
+`stirling.ocr.timeout_seconds`. Before enabling `services.forms` for
+PDF4Fill, measure one multi-page scan through `forms/inspect` with
+`docker stats` running and lower `forms.max_ocr_pages` if Stirling's RAM
+peak leaves too little headroom; `ocr=off` per request skips OCR entirely.
+
 ## Parallelism
 
 Staging validation should assume **one AI request at a time** and load
