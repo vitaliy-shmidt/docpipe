@@ -25,6 +25,18 @@ class ServiceFlags(BaseModel):
     assistant: bool = False
 
 
+class FormsServiceFlags(ServiceFlags):
+    # Only used for clients with services.forms - every other client keeps
+    # the exact ServiceFlags shape it always had (no "forms": false key).
+    forms: bool = True
+
+
+class FormsCapabilityInfo(BaseModel):
+    schema_version: str
+    max_pages: int
+    max_fields: int
+
+
 class CapabilitiesResponse(BaseModel):
     ok: bool
     services: ServiceFlags
@@ -285,3 +297,15 @@ class ExtractionWarmupRequest(BaseModel):
 
 # Identical response shape for both warm-up endpoints.
 ExtractionWarmupResponse = AssistantWarmupResponse
+
+
+class FormsCapabilitiesResponse(CapabilitiesResponse):
+    """Capabilities of a client with services.forms (Phase 2.1a).
+
+    A strict superset of CapabilitiesResponse: `services.forms`, the
+    `forms_inspect` feature and the `forms` block are added; nothing else
+    changes. Clients without the flag never receive these keys.
+    """
+
+    services: FormsServiceFlags
+    forms: FormsCapabilityInfo

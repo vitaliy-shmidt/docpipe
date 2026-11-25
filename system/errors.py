@@ -44,6 +44,13 @@ STATUS_BY_CODE: dict[str, int] = {
     # still could not turn into a PDF (broken/exotic document).
     "unsupported_format": 415,
     "conversion_failed": 422,
+    # Forms inspect (Phase 2.1a, PDF4Fill). Messages never contain names,
+    # values, text or the password.
+    "forms_disabled": 403,
+    "password_required": 422,
+    "invalid_password": 422,
+    "xfa_unsupported": 422,
+    "limit_exceeded": 413,
 }
 
 
