@@ -142,7 +142,10 @@ def test_convert_output_that_is_no_pdf_is_rejected(client):
     assert response.json()["code"] == "conversion_failed"
 
 
-@pytest.mark.parametrize("mode,code,status", [("unavailable", "upstream_unavailable", 502), ("timeout", "timeout", 504)])
+@pytest.mark.parametrize(
+    "mode,code,status",
+    [("unavailable", "upstream_unavailable", 502), ("timeout", "timeout", 504)],
+)
 def test_convert_outage_codes_passed_through(client, mode, code, status):
     client.fake_stirling["client"].convert_mode = mode
     response = _convert(client, SAMPLES["png"], "png")
@@ -210,7 +213,16 @@ def test_stirling_image_conversion_uses_verified_endpoint_and_options():
     assert b"maintainAspectRatio" in body and b'name="colorType"' in body and b'name="autoRotate"' in body
 
 
-@pytest.mark.parametrize("status,code", [(500, "conversion_failed"), (400, "conversion_failed"), (502, "upstream_unavailable"), (503, "upstream_unavailable"), (401, "upstream_auth_failed")])
+@pytest.mark.parametrize(
+    "status,code",
+    [
+        (500, "conversion_failed"),
+        (400, "conversion_failed"),
+        (502, "upstream_unavailable"),
+        (503, "upstream_unavailable"),
+        (401, "upstream_auth_failed"),
+    ],
+)
 def test_stirling_conversion_error_mapping(status, code):
     client = _stirling(lambda request: httpx.Response(status, text="raw stirling error"))
     with pytest.raises(DocPipeError) as exc:
@@ -236,7 +248,9 @@ def test_extract_text_path_keeps_its_500_as_outage():
 
 
 def test_conversion_targets_cover_exactly_the_supported_formats():
-    assert set(CONVERSION_TARGETS) == {"docx", "doc", "odt", "rtf", "txt", "jpg", "jpeg", "png", "tif", "tiff"}
+    assert set(CONVERSION_TARGETS) == {
+        "docx", "doc", "odt", "rtf", "txt", "jpg", "jpeg", "png", "tif", "tiff",
+    }
 
 
 # ---------------- contract_document_classification ----------------
@@ -247,13 +261,19 @@ CLASSIFICATION = MODES["contract_document_classification"]
 def test_classification_mode_is_small_and_light():
     assert CLASSIFICATION.model_profile == "light"
     assert CLASSIFICATION.max_input_length == 20_000
-    assert set(CLASSIFICATION.response_schema["properties"]) == {"classification", "document_kind", "reason_code"}
+    assert set(CLASSIFICATION.response_schema["properties"]) == {
+        "classification", "document_kind", "reason_code",
+    }
 
 
 @pytest.mark.parametrize("value", ["contract", "uncertain", "not_contract"])
 def test_classification_schema_accepts_the_three_classes(value):
     jsonschema.validate(
-        {"classification": value, "document_kind": "service_contract", "reason_code": "contract_terms_detected"},
+        {
+            "classification": value,
+            "document_kind": "service_contract",
+            "reason_code": "contract_terms_detected",
+        },
         CLASSIFICATION.response_schema,
     )
 
@@ -263,7 +283,12 @@ def test_classification_schema_accepts_the_three_classes(value):
     [
         {"classification": "maybe", "document_kind": "invoice", "reason_code": "invoice_detected"},
         {"classification": "contract", "document_kind": "invoice", "reason_code": "because the text says so"},
-        {"classification": "contract", "document_kind": "invoice", "reason_code": "ambiguous", "vendor_name": "KONE"},
+        {
+            "classification": "contract",
+            "document_kind": "invoice",
+            "reason_code": "ambiguous",
+            "vendor_name": "KONE",
+        },
         {"classification": "contract"},
     ],
 )
@@ -281,10 +306,18 @@ def test_classification_prompt_prefers_uncertain_and_extracts_nothing():
 
 def test_classification_runs_through_analyze_with_light_profile(client):
     fake = client.fake_ollama["client"]
-    fake.result = {"classification": "not_contract", "document_kind": "invoice", "reason_code": "invoice_detected"}
+    fake.result = {
+        "classification": "not_contract",
+        "document_kind": "invoice",
+        "reason_code": "invoice_detected",
+    }
     response = client.post(
         "/api/v1/documents/analyze",
-        json={"mode": "contract_document_classification", "context": {"document_type_target": "contract"}, "text": "RECHNUNG Nr. 1"},
+        json={
+            "mode": "contract_document_classification",
+            "context": {"document_type_target": "contract"},
+            "text": "RECHNUNG Nr. 1",
+        },
         headers=auth_headers(AI_KEY),
     )
     assert response.status_code == 200
