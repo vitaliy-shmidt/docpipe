@@ -24,7 +24,7 @@ from system import VERSION
 from system.ai.prompt_registry import PromptRegistry
 from system.config import load_settings
 from system.errors import STATUS_BY_CODE, DocPipeError
-from system.routes import analyze, assistant, capabilities, documents, health, lab
+from system.routes import analyze, assistant, capabilities, documents, forms, health, lab
 from system.services.ollama import OllamaClient
 from system.services.stirling import StirlingClient
 
@@ -51,6 +51,7 @@ app = FastAPI(title="DocPipe", version=VERSION, lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(capabilities.router)
 app.include_router(documents.router)
+app.include_router(forms.router)
 app.include_router(analyze.router)
 app.include_router(lab.router)
 app.include_router(assistant.router)
@@ -81,10 +82,16 @@ async def request_logging_middleware(request: Request, call_next):
 
 @app.exception_handler(DocPipeError)
 async def docpipe_error_handler(request: Request, exc: DocPipeError) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"ok": False, "code": exc.code, "message": exc.message},
-    )
+    content = {"ok": False, "code": exc.code, "message": exc.message}
+    if getattr(exc, "details", None):
+        content["details"] = exc.details
+    return JSONResponse(status_code=exc.status_code, content=content)
+
+
+# Upload endpoints whose malformed requests (e.g. missing `file`) are reported
+# as invalid_file. forms/inspect (Phase 2.1a) joins extract-text; every other
+# endpoint keeps invalid_request exactly as before.
+_FILE_ENDPOINTS = frozenset({"/api/v1/documents/extract-text", forms.INSPECT_PATH, forms.FILL_PATH})
 
 
 @app.exception_handler(RequestValidationError)
@@ -94,7 +101,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     # the file-upload endpoint - "invalid_file" is specifically about an
     # uploaded document and would be a misleading code for a bad `text`/
     # `mode`/`context` field.
-    is_file_endpoint = request.url.path == "/api/v1/documents/extract-text"
+    is_file_endpoint = request.url.path in _FILE_ENDPOINTS
     code = "invalid_file" if is_file_endpoint else "invalid_request"
     return JSONResponse(
         status_code=STATUS_BY_CODE[code],
@@ -105,7 +112,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     if exc.status_code == 400:
-        is_file_endpoint = request.url.path == "/api/v1/documents/extract-text"
+        is_file_endpoint = request.url.path in _FILE_ENDPOINTS
         code = "invalid_file" if is_file_endpoint else "invalid_request"
         message = "The request could not be processed."
     elif exc.status_code == 404:

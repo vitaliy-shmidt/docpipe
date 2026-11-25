@@ -44,6 +44,21 @@ engine or model provider sits behind it, or how to talk to it.
   `contract_extraction` (normalization, relevant-passage selection, chunked
   extraction for very long contracts) - the AI input only, never the stored
   text (see [docs/contract-text-optimization.md](docs/contract-text-optimization.md))
+- Structural inspection of PDF form templates for PDF4Fill: native fields,
+  proposals for input fields on static pages (lines, boxes, checkboxes,
+  `____` placeholders - marked `source: detected` with a confidence), page
+  text with positions in one normalized coordinate system, OCR (via
+  Stirling) for pages without a text layer, SHA-256, encryption/XFA/signature
+  detection (Phase 2.1a/2.1b, separate `forms` opt-in - see
+  [docs/forms-inspect.md](docs/forms-inspect.md); implemented, not yet verified in
+  production - see the rollout checklist in docs/staging-deployment.md)
+- Filling PDF form templates for PDF4Fill: native fields by their inspect
+  identity, freely placed fields and PNG signatures/stamps, bundled Unicode
+  fonts with colour, alignment, multiline and auto-fit, overflow and
+  unprintable characters as errors (never truncated), flattened print-ready
+  output that keeps the template's encryption (Phase 2.2, same `forms`
+  opt-in - see [docs/forms-fill.md](docs/forms-fill.md); implemented, not yet
+  verified in production)
 - A normalized, stable success/error response contract across all of the above
 - Per-client service flags loaded from a local config file (no database)
 
@@ -58,6 +73,10 @@ engine or model provider sits behind it, or how to talk to it.
 - No automatic document classification
 - No database, no persistent jobs, no background queue
 - No quotas, plans, usage tracking, or billing
+- No interactive (non-flattened) filled output and no output passwords yet;
+  no changes to signed or certified PDFs; no image-based line detection on
+  scans - `forms/inspect` proposes static fields from vector graphics and
+  text only, and never adopts a proposal by itself
 - No user management, no web UI
 - No persistence of uploaded documents — every request is processed
   in a temp file that is deleted immediately afterwards
@@ -439,6 +458,12 @@ capability, not a per-client flag). `prompt_lab` and `assistant` are both
 independent opt-ins from `ai` - a client needs the matching flag even if
 it already has `ai: true`.
 
+A client with `services.forms: true` (Phase 2.1a-2.2) additionally gets
+`services.forms`, the features `forms_inspect`, `forms_detect`, `forms_fill` and
+(only with `stirling.ocr.enabled`) `forms_ocr`, and a `forms` block (`schema_version`,
+`max_pages`, `max_fields`, `max_ocr_pages`, `fonts`, `max_images`). For every other client the
+body is exactly as shown above - no `forms` key at all.
+
 ### `POST /api/v1/documents/extract-text` — authenticated
 
 Multipart upload, field name `file`. Accepts `application/pdf` only
@@ -469,7 +494,8 @@ Contract Import V2.1, ZIP import). Multipart: `file` + form field
 `source_format`, one of `docx`, `doc`, `odt`, `rtf`, `txt`, `jpg`, `jpeg`,
 `png`, `tif`, `tiff` (anything else -> `unsupported_format`, no Stirling
 call). DocPipe checks the bytes against the format (OOXML/ODF zip magic,
-OLE magic for `.doc`, `{tf`, JPEG/PNG/TIFF signatures, no NUL bytes in
+OLE magic for `.doc`, `{
+tf`, JPEG/PNG/TIFF signatures, no NUL bytes in
 `.txt` -> otherwise `invalid_file`), sends them to Stirling under a
 server-chosen name `document.<format>` (never the client's file name) and
 re-validates the output as a PDF. `.txt` is normalised to UTF-8 with BOM
@@ -484,6 +510,41 @@ but could not convert this file, or returned something that is no PDF),
 business logic: DocPipe knows nothing about hotels, drafts or what the
 document is for; one image is one PDF (no page grouping). Advertised as
 feature `convert_to_pdf` in `/capabilities` for `documents` clients.
+
+### `POST /api/v1/documents/forms/inspect` — authenticated, `forms`
+
+Phase 2.1a/2.1b (PDF4Fill). Multipart `file` (PDF) + optional `password`,
+`ocr` (`auto`/`off`) and `detect` (`auto`/`off`). Returns native form fields
+(one entry per widget), proposals for static fields (`source: detected`,
+`confidence`, label from neighbouring text - never adopted automatically),
+page text and text blocks, all positions in one system (points, visible
+page = CropBox, origin top-left, page from 1, rotation applied), the SHA-256
+of the upload, security facts (encryption, permissions, signatures, XFA)
+and warnings. Structure and layout run in-process with pikepdf and
+pdfminer.six; pages without a text layer are OCR'd through the existing
+Stirling OCR call (only those pages, at most `forms.max_ocr_pages`; OCR
+output is mapped onto the template only when its geometry matches, else a
+warning). An OCR failure is a warning, not an error. `Cache-Control:
+no-store`. Full contract: [docs/forms-inspect.md](docs/forms-inspect.md);
+OpenAPI 3.1: [docs/openapi/forms.openapi.json](docs/openapi/forms.openapi.json).
+
+### `POST /api/v1/documents/forms/fill` — authenticated, `forms`
+
+Phase 2.2 (PDF4Fill). Multipart `file` (the unchanged template), `manifest`
+(JSON: SHA-256 of the template, fields in `native` mode by `native_ref` or
+in `overlay` mode by page + position, values, resolved styles), optional
+`password` and repeated `images` parts (PNG; file name = `image_ref`).
+Returns the filled, **flattened** PDF (`application/pdf`, `Cache-Control:
+no-store`): native text drawn with the bundled fonts on top of the field's
+own border, checkboxes/radios via the template's appearance states, images
+fitted proportionally, all positions as inspect reports them (CropBox and
+rotation applied). Overflow, unprintable characters, unknown or
+conflicting fields, wrong options and protection problems are structured
+errors with `details` (field id/reason - never values). Encrypted templates
+keep their encryption; signed/certified PDFs are refused. `output.preview`
+is the same rendering plus a watermark. Runs in-process (pikepdf,
+reportlab, Pillow); no Stirling call. Full contract:
+[docs/forms-fill.md](docs/forms-fill.md).
 
 ### `POST /api/v1/documents/analyze` — authenticated, V2
 
@@ -571,6 +632,21 @@ Every error, from any endpoint, has the same shape:
 | `assistant_disabled`    | 403         | Client is known but `assistant` isn't enabled     |
 | `unsupported_format`    | 415         | `convert-to-pdf`: format outside the supported list |
 | `conversion_failed`     | 422         | `convert-to-pdf`: Stirling could not convert this file (or returned no PDF) |
+| `forms_disabled`        | 403         | Client is known but `forms` isn't enabled         |
+| `limit_exceeded`        | 413         | `forms/inspect`: more pages/fields than `forms.max_pages`/`max_fields` |
+| `password_required`     | 422         | `forms/inspect`: the PDF needs an open password and none was sent |
+| `invalid_password`      | 422         | `forms/inspect`: the supplied password does not open the PDF |
+| `xfa_unsupported`       | 422         | `forms/inspect`: dynamic XFA form (no usable AcroForm) |
+| `invalid_manifest`      | 400         | `forms/fill`: manifest schema or consistency error |
+| `invalid_image`         | 400         | `forms/fill`: image part is no readable PNG / bad name |
+| `hash_mismatch`         | 409         | `forms/fill`: template does not match the manifest's sha256 |
+| `permission_denied`     | 422         | `forms/fill`: PDF permissions forbid filling/changing |
+| `signature_conflict`    | 422         | `forms/fill`: signed or certified PDF |
+| `unknown_field`, `field_conflict`, `invalid_geometry`, `invalid_value`, `text_overflow`, `unsupported_characters` | 422 | `forms/fill`: see docs/forms-fill.md |
+
+Errors of the forms endpoints may carry an additional `details` object
+(field id, reason, permission, manifest path - never submitted values).
+Every other endpoint's error body is unchanged.
 | `internal_error`        | 500         | Unexpected DocPipe-side failure                   |
 
 `model_profile_unavailable` should, in practice, never happen: the same
@@ -960,6 +1036,9 @@ wording, or provider details - see "Multi-project design" above.
 
 ## Files & security
 
+- Bundled third-party fonts: `system/forms/fonts/` (Liberation Sans/Serif/
+  Mono 2.1.5, SIL Open Font License 1.1 - `LICENSE` and `AUTHORS` there),
+  used only by `forms/fill` and embedded as subsets into its output.
 - Uploads are validated by content, not extension: the first bytes must
   be a real PDF signature (`%PDF-`).
 - Each upload is written to a temp file with a random name (`tempfile.mkstemp`) —
@@ -998,6 +1077,16 @@ call count and timings (see docs/contract-text-optimization.md
 Never logged: API keys, the `Authorization` header, the Stirling/Ollama
 API keys, document contents/text (extracted or OCR'd), the uploaded
 filename, AI prompts, or AI output.
+
+`/documents/forms/inspect` logs one `forms_inspect` line per request with
+input size, page/native-field/proposal/warning counts, OCR status and OCR'd
+page count, encrypted/xfa/signed flags, status and duration - never field
+names, labels, page or OCR text, or the password.
+
+`/documents/forms/fill` logs one `forms_fill` line per request with
+input/output size, pages, native/overlay field and image counts, preview,
+encrypted, status and duration - never field ids, values, file names,
+images or the password.
 
 ## Tests
 
@@ -1121,6 +1210,37 @@ If you do have real Stirling/Ollama instances available locally, a
 manual end-to-end check with an actual PDF and a few real documents per
 AI mode is worthwhile before deploying — see
 [docs/staging-deployment.md](docs/staging-deployment.md) for a checklist.
+
+Forms inspect (Phase 2.1a, `tests/test_forms_inspect.py`): field types and
+attributes, hand-computed positions for 0/90/180/270 and inherited rotation,
+CropBox/MediaBox offsets and clipping, text blocks in the same coordinate
+system, encryption/permissions/signatures/XFA, limits, broken input, the
+`forms` permission, metadata-only logging, temp-file cleanup and the
+unchanged `/capabilities` body for clients without `forms`. Reads the
+synthetic reference PDFs in `tests/fixtures/forms/` (generator
+`python -m tests.forms_fixtures`).
+
+Forms OCR and field proposals (Phase 2.1b, `tests/test_forms_ocr_detect.py`):
+which pages are sent to OCR and in which geometry, OCR output in both
+Stirling 3.2.2 forms (OCRmyPDF: identical page; Tesseract: re-rendered page)
+mapped onto A4, rotated and cropped scans, geometry mismatch, Stirling
+timeout/outage/no PDF/missing page/no text, the OCR page limit, encrypted
+scans (sent decrypted, never with the password), permissions; a static form
+with 8 fields and 5 decoys in five display-identical variants (plain,
+`/Rotate` 90/180/270 with upright content, offset MediaBox/CropBox),
+confidence and labels, native widgets suppressing proposals, the route
+options, and real responses validated against the committed OpenAPI
+snapshot (which must match the running app).
+
+Forms fill (Phase 2.2, `tests/test_forms_fill.py`): visual tests render the
+output with PDFium (`pypdfium2`, dev dependency) and measure where ink
+lands - text in its field, alignment, colour, upright text and images on
+pages rotated 0/90/180/270, CropBox offsets, proportional images with
+transparency, checkbox/radio states and vector marks, kept borders,
+multi-widget and hidden widgets; plus Unicode/unsupported characters,
+auto-fit and overflow, every validation error and conflict, preserved
+encryption, signatures, XFA, determinism, preview = final + watermark,
+route, temp-file cleanup and log content.
 
 ## Not implemented (by design)
 

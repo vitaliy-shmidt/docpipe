@@ -50,6 +50,13 @@ from system.assistant.modes import ASSISTANT_MODES
 
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_MAX_FILE_SIZE_MB = 25
+# Phase 2.1a forms/inspect (PDF4Fill): technical safety limits, not quotas.
+# Layout analysis is CPU-bound and runs in-process, so a page cap protects the
+# shared server; commercial limits stay in the calling application.
+DEFAULT_FORMS_MAX_PAGES = 200
+DEFAULT_FORMS_MAX_FIELDS = 2000
+# Phase 2.1b: pages per request sent to Stirling OCR (shared with other clients).
+DEFAULT_FORMS_MAX_OCR_PAGES = 20
 DEFAULT_STIRLING_TIMEOUT_SECONDS = 90
 
 # Ollama Keep-Alive tuning pass (see docs/staging-deployment.md "Ollama
@@ -187,6 +194,9 @@ class ClientServices:
     # too wherever an actual Ollama call is involved (see auth.py).
     prompt_lab: bool = False
     assistant: bool = False
+    # Phase 2.1a (PDF4Fill): /documents/forms/* - a separate, explicit opt-in.
+    # Independent of `documents`; existing clients without the key keep False.
+    forms: bool = False
 
 
 @dataclass(frozen=True)
@@ -210,6 +220,13 @@ class ServerSettings:
 
 
 @dataclass(frozen=True)
+class FormsSettings:
+    max_pages: int = DEFAULT_FORMS_MAX_PAGES
+    max_fields: int = DEFAULT_FORMS_MAX_FIELDS
+    max_ocr_pages: int = DEFAULT_FORMS_MAX_OCR_PAGES
+
+
+@dataclass(frozen=True)
 class Settings:
     server: ServerSettings
     stirling: StirlingSettings
@@ -220,6 +237,7 @@ class Settings:
     # Every optimizable mode is present - enabled unless config disables it.
     text_optimization: dict[str, TextOptimizationSettings] = field(default_factory=default_text_optimization)
     clients: dict[str, ClientConfig] = field(default_factory=dict)
+    forms: FormsSettings = FormsSettings()
 
     def find_client_by_api_key(self, api_key: str) -> ClientConfig | None:
         for client in self.clients.values():
@@ -474,6 +492,29 @@ def validate_ai_config(settings: Settings) -> None:
     _validate_client_overrides(settings.clients, settings.models)
 
 
+def _parse_forms(raw_forms: object) -> FormsSettings:
+    if raw_forms is None:
+        return FormsSettings()
+    if not isinstance(raw_forms, dict):
+        raise ConfigError("'forms' must be a mapping.")
+    unknown = set(raw_forms) - {"max_pages", "max_fields", "max_ocr_pages"}
+    if unknown:
+        raise ConfigError(f"forms has unknown keys: {sorted(unknown)}.")
+    values = {}
+    for key, default in (
+        ("max_pages", DEFAULT_FORMS_MAX_PAGES),
+        ("max_fields", DEFAULT_FORMS_MAX_FIELDS),
+        ("max_ocr_pages", DEFAULT_FORMS_MAX_OCR_PAGES),
+    ):
+        raw_value = raw_forms.get(key, default)
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise ConfigError(f"forms.{key} must be an integer.")
+        if raw_value <= 0:
+            raise ConfigError(f"forms.{key} must be positive.")
+        values[key] = raw_value
+    return FormsSettings(**values)
+
+
 def load_settings() -> Settings:
     config_path = os.environ.get("DOCPIPE_CONFIG", DEFAULT_CONFIG_PATH)
     raw = _load_yaml(config_path)
@@ -542,6 +583,7 @@ def load_settings() -> Settings:
                 ai=bool(raw_services.get("ai", False)),
                 prompt_lab=bool(raw_services.get("prompt_lab", False)),
                 assistant=bool(raw_services.get("assistant", False)),
+                forms=bool(raw_services.get("forms", False)),
             ),
             model_overrides=_parse_model_overrides(client_id, raw_client.get("model_overrides")),
         )
@@ -554,6 +596,7 @@ def load_settings() -> Settings:
         models=models,
         clients=clients,
         text_optimization=_parse_text_optimization(raw.get("text_optimization")),
+        forms=_parse_forms(raw.get("forms")),
     )
 
     # Unconditional (see _validate_prompt_defaults docstring) - unlike

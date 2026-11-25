@@ -1,0 +1,5 @@
+# Binary test fixtures (tests/fixtures/forms/): never normalise line endings - a PDF without
+# NUL bytes would otherwise be treated as text and corrupted by core.autocrlf.
+*.pdf binary
+# Bundled fonts (system/forms/fonts/): binary, never normalised.
+*.ttf binary

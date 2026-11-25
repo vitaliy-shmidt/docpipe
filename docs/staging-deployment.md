@@ -298,6 +298,22 @@ staging test, not just at idle. The AI model does not need to be loaded
 for an OCR test, so OCR and AI load can be measured independently rather
 than assumed additive.
 
+PDF4Fill's `forms/inspect` (Phase 2.1b) uses the same Stirling OCR call
+for pages without a text layer - the same Stirling instance HubDix's
+extract-text relies on. It sends only those pages, at most
+`forms.max_ocr_pages` (default 20) per request, with the shared
+`stirling.ocr.timeout_seconds`. Before enabling `services.forms` for
+PDF4Fill, measure one multi-page scan through `forms/inspect` with
+`docker stats` running and lower `forms.max_ocr_pages` if Stirling's RAM
+peak leaves too little headroom; `ocr=off` per request skips OCR entirely.
+
+`forms/fill` (Phase 2.2) runs entirely inside the DocPipe process (no
+Stirling call): pikepdf, reportlab and Pillow, with the bundled fonts from
+the image (`system/forms/fonts/`). Its cost is CPU and transient RAM in
+the DocPipe container proportional to page count and image size (images
+are capped at 25 megapixels); measure one large template with images via
+`docker stats` for the DocPipe container before enabling it.
+
 ## Parallelism
 
 Staging validation should assume **one AI request at a time** and load
@@ -402,3 +418,53 @@ This newer deployment supersedes the older 8 GiB staging box as the primary
 performance reference. The older measurements in this guide remain useful as
 historical context and for understanding why keep-alive and timeout tuning were
 introduced.
+
+## PDF4Fill forms rollout (Phase 2)
+
+Status 25.11.2026: `forms/inspect` (2.1a/2.1b) and `forms/fill` (2.2) are
+implemented, tested automatically (CI: 911 tests incl. PDFium-rendered
+visual checks) and the image builds and serves both endpoints locally. They
+are **not verified in production**. Nothing changes for existing clients as
+long as no client has `services.forms: true` (default `false`); the steps
+below are the remaining integration work, each with its own approval.
+
+1. **Stirling 3.2.2.** The server runs Stirling-PDF v3.2.2 (image digest
+   `sha256:c6872dd056b0046a14c5de1e9970283e7f1e1ff685bb08090c6b37a231127d31`,
+   reported by the operator). The OCR call's parameters were checked against
+   the v3.2.2 source; `docker-compose.yml` still says
+   `stirlingtools/stirling-pdf:latest` - pin it to this digest (or tag)
+   before relying on forms OCR, so an image pull cannot change the OCR path
+   or its output geometry unnoticed.
+2. **Own PDF4Fill client.** A separate entry in the server's `config.yaml`,
+   e.g. `pdf4fill` with its own random key and `services: {documents: true,
+   forms: true}` - no `ai`, `prompt_lab` or `assistant`. The operator creates
+   the key and stores it only in PDF4Fill's configuration. Changing
+   `config.yaml` needs a DocPipe restart, which briefly interrupts HubDix:
+   schedule it.
+3. **Real OCR test.** With the PDF4Fill client, inspect real scanned forms
+   (A4, landscape with `/Rotate`, multi-page, encrypted with password) and
+   check per page: `ocr.status`, `ocr.pages[].geometry` (`identical` =
+   Stirling's OCRmyPDF path, `rescaled` = its Tesseract fallback,
+   `mismatch` = no positions), text quality, positions of known labels, and
+   Stirling RAM during the run (`docker stats`, see "RAM awareness"). Adjust
+   `forms.max_ocr_pages` if needed.
+4. **Real forms.** Inspect and fill a set of real PDF4Fill templates
+   (native AcroForms, static forms, mixed); compare proposals with the
+   expected fields, print the filled PDFs and check them visually; this is
+   also the first measurement of detection quality on real documents.
+5. **HubDix regression test** after deploying the new image and before
+   enabling `forms` for anyone - with HubDix's own client, unchanged:
+   - `GET /api/v1/health`, and `GET /api/v1/capabilities`: body identical to
+     before the deployment (no `forms` key, same features);
+   - `POST /api/v1/documents/extract-text` with a text PDF
+     (`extraction_method: embedded_text`) and with a scan
+     (`extraction_method: ocr`);
+   - `POST /api/v1/documents/convert-to-pdf` with a .docx and a .jpg;
+   - `POST /api/v1/documents/analyze` for the modes HubDix uses
+     (e.g. `contract_extraction`, `contract_document_classification`) and
+     `POST /api/v1/assistant/query` (plus Prompt Lab if HubDix's DocLab uses
+     it);
+   - HubDix's own contract-import and assistant flows end to end;
+   - DocPipe logs: no new error codes for HubDix's client.
+6. **Rollback.** Keep the previous DocPipe image tag; rolling back is
+   redeploying it - `forms` has no persistent state to migrate.

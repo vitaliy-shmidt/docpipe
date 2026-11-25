@@ -73,3 +73,9 @@ def require_assistant_service(client: ClientConfig) -> None:
     """Raise DocPipeError("assistant_disabled") unless assistant is enabled."""
     if not client.services.assistant:
         raise DocPipeError("assistant_disabled", "The assistant service is not enabled for this client.")
+
+
+def require_forms_service(client: ClientConfig) -> None:
+    """Raise DocPipeError("forms_disabled") unless forms is enabled (Phase 2.1a)."""
+    if not client.services.forms:
+        raise DocPipeError("forms_disabled", "The forms service is not enabled for this client.")
