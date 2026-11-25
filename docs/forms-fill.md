@@ -1,5 +1,7 @@
 # Forms fill (Phase 2.2, PDF4Fill)
 
+> **Status (25.11.2026):** implemented and covered by automated tests (CI, 911 tests) and a local Docker build; merged to `main` via PR #1. **Not yet verified in production**: no server deployment, no real Stirling OCR run, no PDF4Fill client. Rollout checklist: [staging-deployment.md](staging-deployment.md#pdf4fill-forms-rollout-phase-2).
+
 `POST /api/v1/documents/forms/fill` fills a PDF form template and returns a
 new, **flattened, print-ready PDF**. It is the second half of the PDF4Fill
 integration; the template and every position come from

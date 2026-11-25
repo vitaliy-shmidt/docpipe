@@ -1,5 +1,7 @@
 # Forms inspect (Phase 2.1a + 2.1b, PDF4Fill)
 
+> **Status (25.11.2026):** implemented and covered by automated tests (CI, 911 tests) and a local Docker build; merged to `main` via PR #1. **Not yet verified in production**: no server deployment, no real Stirling OCR run, no PDF4Fill client. Rollout checklist: [staging-deployment.md](staging-deployment.md#pdf4fill-forms-rollout-phase-2).
+
 `POST /api/v1/documents/forms/inspect` reads the structure of a PDF form
 template: native form fields, proposals for input fields on static pages,
 page text with positions (OCR for pages without a text layer), the template's

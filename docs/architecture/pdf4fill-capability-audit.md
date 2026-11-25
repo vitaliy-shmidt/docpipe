@@ -2,7 +2,7 @@
 
 Stand: 25.11.2026 · DocPipe `main` @ `c6b5397` (v0.1.0) · Status: **Audit und Vorschlag, keine Implementierung**
 
-> **Umsetzungsstand:** Phasen 2.1a, 2.1b und 2.2 sind auf Branch `feature/forms-inspect` umgesetzt (Abschnitt 8). Verträge: [forms-inspect.md](../forms-inspect.md), [forms-fill.md](../forms-fill.md), OpenAPI [forms.openapi.json](../openapi/forms.openapi.json). Präzisierung gegenüber Abschnitt 5.1: `native_ref` ist die Widget-Objektreferenz (`<objnum>.<gen>`), die gemeinsame Feldidentität trägt `field_ref`.
+> **Umsetzungsstand:** Phasen 2.1a, 2.1b und 2.2 sind implementiert (PR #1), aber noch nicht produktiv verifiziert (Abschnitt 8). Verträge: [forms-inspect.md](../forms-inspect.md), [forms-fill.md](../forms-fill.md), OpenAPI [forms.openapi.json](../openapi/forms.openapi.json). Präzisierung gegenüber Abschnitt 5.1: `native_ref` ist die Widget-Objektreferenz (`<objnum>.<gen>`), die gemeinsame Feldidentität trägt `field_ref`.
 
 Grundlage: DocPipe-Code und -Doku, PDF4Fill [ROADMAP Phase 2](https://github.com/vitaliy-shmidt/PDF4Fill/blob/main/ROADMAP.md) und [`docs/api/contracts.md`](https://github.com/vitaliy-shmidt/PDF4Fill/blob/main/docs/api/contracts.md), Stirling-PDF-Quellcode der Tags `v2.14.2` und `v3.5.0`, isolierte Tests mit synthetischen PDFs. Auf dem Server wurde nichts geändert, an DocPipe-Code und -Konfiguration ebenfalls nicht.
 
@@ -128,7 +128,7 @@ Multipart `file` (unveränderte Arbeitsvorlage) + `manifest` (JSON) + optional `
 ## 7. Empfohlener nächster Implementierungsschritt
 **Phase 2.1a (nach Freigabe):** Im DocPipe-Repo additiv `services.forms` (Standard `false`), `routes/forms.py` mit **nur `forms/inspect`** (native Felder, Geometrie-Normalisierung, Text/Textblöcke, Verschlüsselungs-/XFA-/Signatur-Erkennung) mit `pikepdf` und `pdfminer.six`, ohne Detection und ohne OCR. Dazu kommt ein synthetischer Referenzkorpus (gedreht 0/90/180/270, CropBox-Versatz, Mehrfach-Widgets, verschlüsselt, signiert, XFA) samt Gegenprobe gegen Stirling `form/fields-with-coordinates`. Abnahme: bestehende 748 Tests grün, `/capabilities` für Clients ohne `forms` unverändert. Danach folgen 2.1b (OCR und Kandidaten) und 2.2 (Fill).
 
-## 8. Umsetzungsstand und Roadmap (Stand 25.11.2026)
+## 8. Umsetzungsstand und Roadmap (Stand 25.11.2026: implementiert, nicht produktiv verifiziert)
 
 | Phase | Inhalt | Stand |
 |---|---|---|
@@ -144,17 +144,26 @@ Vorlage (Vektorzeichen nur als Rückfall); die Ausgabe-Verschlüsselung entspric
 immer der Vorlage (Ausgabe-Passwörter bleiben Post-MVP). Fehler tragen ein
 zusätzliches `details`-Objekt nur bei den Forms-Endpunkten.
 
-Offen (jeweils eigene Freigabe):
-1. Staging-Test mit echtem Stirling 3.2.2 (welcher OCR-Pfad aktiv ist) und
-   echten Formularen; Referenzkorpus zur Messung der Erkennungsqualität.
-2. Docker-Build mit den neuen Abhängigkeiten (pikepdf, pdfminer.six,
-   reportlab, Pillow) und den gebündelten Schriften; Stirling-Version im
-   Compose-File fixieren (derzeit `latest`).
-3. PDF4Fill-Client in der Server-`config.yaml` (Betreiber; DocPipe-Neustart
-   unterbricht HubDix kurz).
-4. Merge nach `main` und Deployment.
-5. Post-MVP: Ausgabe-Passwort, nicht-flache Ausgabe, Linien-Erkennung in Scans.
-6. Limits und Nutzungsstatistik je Client (Abschnitt 4): inzwischen in
-   [performance-roadmap.md](../performance-roadmap.md), "Mandatory usage and budget
-   enforcement", allgemein für DocPipe-Clients geplant (dort noch als "PDF2Fill"
-   bezeichnet); `forms/*` hat bis dahin nur die technischen `forms.*`-Grenzen.
+Gesamtstand: Phasen 2.1a, 2.1b und 2.2 sind **implementiert** und über PR #1 in
+`main` übernommen; automatisiert getestet (CI grün, 911 Tests inkl. visueller
+PDFium-Prüfungen), Docker-Image lokal gebaut und beide Endpunkte im Container
+geprüft. **Nicht produktiv verifiziert**: kein Deployment, kein realer
+Stirling-OCR-Lauf, keine realen Formulare, kein PDF4Fill-Client.
+
+Weiterer Integrationsbedarf (jeweils eigene Freigabe; Checkliste in
+[staging-deployment.md](../staging-deployment.md#pdf4fill-forms-rollout-phase-2)):
+1. **Stirling 3.2.2:** Server-Version laut Betreiber v3.2.2 (Digest
+   `sha256:c6872dd056b0046a14c5de1e9970283e7f1e1ff685bb08090c6b37a231127d31`);
+   OCR-Parameter gegen den Quellcode geprüft, aktiver OCR-Pfad (OCRmyPDF oder
+   Tesseract) noch unbekannt; Compose-File auf diese Version fixieren.
+2. **Eigener PDF4Fill-Client** (`documents` + `forms`, eigener Key, kein `ai`),
+   angelegt durch den Betreiber; Neustart von DocPipe unterbricht HubDix kurz.
+3. **Realer OCR-Test** mit gescannten Formularen (Geometrie, Textqualität, RAM).
+4. **Regressionstest für HubDix** nach dem Deployment des neuen Images, bevor
+   `forms` aktiviert wird (health/capabilities unverändert, extract-text mit
+   und ohne OCR, convert-to-pdf, analyze/assistant, HubDix-Abläufe Ende zu Ende).
+5. Reale Formulare zur Messung der Erkennungsqualität; Deployment.
+6. Limits und Nutzungsstatistik je Client: allgemein geplant in
+   [performance-roadmap.md](../performance-roadmap.md) ("Mandatory usage and
+   budget enforcement", dort noch als "PDF2Fill" bezeichnet).
+7. Post-MVP: Ausgabe-Passwort, nicht-flache Ausgabe, Linien-Erkennung in Scans.

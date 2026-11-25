@@ -50,13 +50,15 @@ engine or model provider sits behind it, or how to talk to it.
   text with positions in one normalized coordinate system, OCR (via
   Stirling) for pages without a text layer, SHA-256, encryption/XFA/signature
   detection (Phase 2.1a/2.1b, separate `forms` opt-in - see
-  [docs/forms-inspect.md](docs/forms-inspect.md))
+  [docs/forms-inspect.md](docs/forms-inspect.md); implemented, not yet verified in
+  production - see the rollout checklist in docs/staging-deployment.md)
 - Filling PDF form templates for PDF4Fill: native fields by their inspect
   identity, freely placed fields and PNG signatures/stamps, bundled Unicode
   fonts with colour, alignment, multiline and auto-fit, overflow and
   unprintable characters as errors (never truncated), flattened print-ready
   output that keeps the template's encryption (Phase 2.2, same `forms`
-  opt-in - see [docs/forms-fill.md](docs/forms-fill.md))
+  opt-in - see [docs/forms-fill.md](docs/forms-fill.md); implemented, not yet
+  verified in production)
 - A normalized, stable success/error response contract across all of the above
 - Per-client service flags loaded from a local config file (no database)
 
