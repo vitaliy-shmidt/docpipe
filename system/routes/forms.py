@@ -1,4 +1,4 @@
-"""PDF4Fill form endpoints (Phase 2.1a: inspect only).
+"""PDF4Fill form endpoints: inspect (Phase 2.1) and fill (Phase 2.2).
 
 `POST /api/v1/documents/forms/inspect` - multipart `file` (PDF), optional
 `password` (body only; never logged, never echoed). Requires the separate
@@ -15,16 +15,18 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from system.auth import get_authenticated_client, require_forms_service
 from system.config import ClientConfig, Settings
 from system.errors import DocPipeError
+from system.forms import fill as fill_mod
 from system.forms.inspect import inspect_pdf
-from system.forms.schemas import INSPECT_RESPONSES
+from system.forms.schemas import FILL_RESPONSES, INSPECT_RESPONSES, FillManifest
 from system.routes.documents import _assert_is_pdf, _spool_upload_to_temp_file
 
 router = APIRouter()
@@ -32,6 +34,7 @@ logger = logging.getLogger("docpipe")
 
 INSPECT_PATH = "/api/v1/documents/forms/inspect"
 _MODES = ("auto", "off")
+_IMAGE_REF = re.compile(r"[A-Za-z0-9_.:\-]{1,64}")
 
 
 @router.post(
@@ -119,3 +122,94 @@ def forms_inspect(
         )
 
     return JSONResponse(content={"ok": True, "data": data}, headers={"Cache-Control": "no-store"})
+
+
+FILL_PATH = "/api/v1/documents/forms/fill"
+
+
+def _read_upload(upload: UploadFile, max_bytes: int) -> bytes:
+    temp_path = _spool_upload_to_temp_file(upload, max_bytes)
+    try:
+        with open(temp_path, "rb") as fh:
+            return fh.read()
+    finally:
+        os.remove(temp_path)
+
+
+@router.post(
+    FILL_PATH,
+    responses=FILL_RESPONSES,
+    response_class=Response,
+    summary="Fill a PDF form template and return a flattened PDF (PDF4Fill, services.forms)",
+    description="Native fields by native_ref, overlay fields and PNG images by page + position (inspect "
+    "coordinates), bundled Unicode fonts, auto-fit, no truncation. The manifest is a JSON string; its "
+    "schema is in x-docpipe-manifest-schema. See docs/forms-fill.md.",
+    openapi_extra={"x-docpipe-manifest-schema": FillManifest.model_json_schema()},
+)
+def forms_fill(
+    request: Request,
+    file: UploadFile = File(..., description="The unchanged PDF template (sha256 from inspect)."),
+    manifest: str = Form(..., description="JSON document, schema x-docpipe-manifest-schema."),
+    password: str | None = Form(
+        default=None, description="Open or owner password; body only, never logged or returned."),
+    images: list[UploadFile] = File(
+        default=[], description="PNG parts; each part's filename is the image_ref used in the manifest."),
+    client: ClientConfig = Depends(get_authenticated_client),
+) -> Response:
+    require_forms_service(client)
+    settings: Settings = request.app.state.settings
+
+    started_at = time.monotonic()
+    status = "success"
+    result = None
+    input_bytes = 0
+    preview = None
+    try:
+        parsed = fill_mod.parse_manifest(manifest)
+        preview = parsed.output.preview
+        file_bytes = _read_upload(file, settings.server.max_file_size_bytes)
+        input_bytes = len(file_bytes)
+        if not file_bytes.startswith(b"%PDF-"):
+            raise DocPipeError("invalid_file", "Uploaded file is not a valid PDF.")
+        if len(images) > fill_mod.MAX_IMAGES:
+            raise DocPipeError("limit_exceeded", "Too many images.")
+        parts: dict[str, bytes] = {}
+        for upload in images:
+            ref = upload.filename or ""
+            if not _IMAGE_REF.fullmatch(ref) or ref in parts:
+                raise DocPipeError("invalid_image", "Each image part needs a unique, simple file name.",
+                                   details={"reason": "image_ref"})
+            parts[ref] = _read_upload(upload, fill_mod.MAX_IMAGE_BYTES)
+        result = fill_mod.fill_pdf(
+            file_bytes,
+            parsed,
+            fill_mod.load_images(parts),
+            password or None,
+            max_pages=settings.forms.max_pages,
+            max_fields=settings.forms.max_fields,
+        )
+    except DocPipeError as exc:
+        status = exc.code
+        raise
+    finally:
+        # Metadata only - never field ids, values, file names, images or the password.
+        logger.info(
+            "forms_fill request_id=%s client_id=%s input_bytes=%s output_bytes=%s pages=%s native=%s "
+            "overlay=%s images=%s preview=%s encrypted=%s status=%s duration_ms=%s",
+            getattr(request.state, "request_id", None),
+            client.client_id,
+            input_bytes,
+            len(result.pdf) if result else 0,
+            result.pages if result else None,
+            result.native_fields if result else None,
+            result.overlay_fields if result else None,
+            result.images if result else None,
+            preview,
+            result.encrypted if result else None,
+            status,
+            round((time.monotonic() - started_at) * 1000, 1),
+        )
+
+    return Response(content=result.pdf, media_type="application/pdf",
+                    headers={"Cache-Control": "no-store",
+                             "X-DocPipe-Preview": "true" if preview else "false"})

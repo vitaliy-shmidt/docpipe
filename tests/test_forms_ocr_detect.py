@@ -514,7 +514,7 @@ def test_committed_openapi_snapshot_is_current():
 
     committed = export_forms_openapi.DEFAULT_TARGET.read_text(encoding="utf-8")
     assert committed == export_forms_openapi.render(), (
-        "docs/openapi/forms-inspect.openapi.json is outdated: "
+        "docs/openapi/forms.openapi.json is outdated: "
         "run python -m system.tools.export_forms_openapi")
 
 
@@ -528,7 +528,7 @@ def test_snapshot_documents_request_options_and_error_statuses():
     assert body["required"] == ["file"]
     assert body["properties"]["ocr"]["enum"] == ["auto", "off"]
     assert body["properties"]["detect"]["enum"] == ["auto", "off"]
-    assert list(spec["paths"]) == [INSPECT_URL]  # nothing but the forms contract
+    assert sorted(spec["paths"]) == ["/api/v1/documents/forms/fill", INSPECT_URL]  # only the forms contract
 
 
 def test_error_responses_match_the_published_schema(forms_client):  # noqa: F811

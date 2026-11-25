@@ -420,6 +420,46 @@ def scan_encrypted() -> bytes:
     return _bytes(pdf, encryption=pikepdf.Encryption(user=USER_PASSWORD, owner=OWNER_PASSWORD, R=6))
 
 
+# --- Phase 2.2: fill ---------------------------------------------------------------------------------
+
+# Every page shows its field UPRIGHT at the same visible position (x 100, y 80, 220 x 24, top-left
+# origin) on an A4 page displayed with /Rotate 0/90/180/270. User-space rects are the inverse of
+# PageBox.to_visible, computed by hand:
+#   0:   x0 = 100,           y0 = 842 - 80 - 24 = 738   -> (100, 738, 320, 762)
+#   90:  x0 = Y = 80,        y0 = X = 100               -> (80, 100, 104, 320)
+#   180: x1 = 595 - 100,     y0 = Y = 80                -> (275, 80, 495, 104)
+#   270: y1 = 842 - 100,     x1 = 595 - 80              -> (491, 522, 515, 742)
+ROTATED_FIELD_RECTS = {0: (100, 738, 320, 762), 90: (80, 100, 104, 320),
+                       180: (275, 80, 495, 104), 270: (491, 522, 515, 742)}
+ROTATED_FIELD_VISIBLE = {"x": 100.0, "y": 80.0, "width": 220.0, "height": 24.0}
+
+
+def rotated_fields() -> bytes:
+    pdf = _new()
+    for rotation, rect in ROTATED_FIELD_RECTS.items():
+        page = _page(pdf, rotate=rotation)
+        text_field(pdf, page, f"feld_r{rotation}", rect)
+    return _bytes(pdf)
+
+
+def appearance_form() -> bytes:
+    """A text field whose appearance has a border AND old variable text; a checkbox without any appearance."""
+    pdf = _new()
+    page = _page(pdf, texts=[(50, 760, "Name:"), (50, 700, "Bestaetigt")])
+    field = text_field(pdf, page, "name", (120, 752, 320, 772))
+    field.V = String("ALT")
+    ap = pikepdf.Stream(pdf, b"0.6 G 1 w 0.5 0.5 199 19 re S\n"
+                             b"/Tx BMC q BT /Helv 10 Tf 0 g 2 6 Td (ALT) Tj ET Q EMC\n")
+    ap.Type, ap.Subtype, ap.BBox = Name.XObject, Name.Form, Array([0, 0, 200, 20])
+    ap.Resources = Dictionary(Font=Dictionary(Helv=pdf.Root.AcroForm.DR.Font.Helv))
+    field.AP = Dictionary(N=ap)
+    box = pdf.make_indirect(Dictionary(Type=Name.Annot, Subtype=Name.Widget, FT=Name.Btn, T=String("ok"),
+                                       Rect=Array([150, 692, 164, 706]), F=4, P=page.obj))
+    pdf.Root.AcroForm.Fields.append(box)
+    _attach(page, box)
+    return _bytes(pdf)
+
+
 REFERENCE_PDFS = {
     "basic-form.pdf": basic_form,
     "rotated-pages.pdf": rotated_pages,
@@ -439,6 +479,8 @@ REFERENCE_PDFS = {
     "mixed-native-static.pdf": mixed_native_static,
     "scan-pages.pdf": scan_pages,
     "scan-encrypted.pdf": scan_encrypted,
+    "rotated-fields.pdf": rotated_fields,
+    "appearance-form.pdf": appearance_form,
 }
 
 

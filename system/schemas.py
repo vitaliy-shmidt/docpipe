@@ -36,6 +36,8 @@ class FormsCapabilityInfo(BaseModel):
     max_pages: int
     max_fields: int
     max_ocr_pages: int
+    fonts: dict[str, str]
+    max_images: int
 
 
 class CapabilitiesResponse(BaseModel):

@@ -82,16 +82,16 @@ async def request_logging_middleware(request: Request, call_next):
 
 @app.exception_handler(DocPipeError)
 async def docpipe_error_handler(request: Request, exc: DocPipeError) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"ok": False, "code": exc.code, "message": exc.message},
-    )
+    content = {"ok": False, "code": exc.code, "message": exc.message}
+    if getattr(exc, "details", None):
+        content["details"] = exc.details
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 # Upload endpoints whose malformed requests (e.g. missing `file`) are reported
 # as invalid_file. forms/inspect (Phase 2.1a) joins extract-text; every other
 # endpoint keeps invalid_request exactly as before.
-_FILE_ENDPOINTS = frozenset({"/api/v1/documents/extract-text", forms.INSPECT_PATH})
+_FILE_ENDPOINTS = frozenset({"/api/v1/documents/extract-text", forms.INSPECT_PATH, forms.FILL_PATH})
 
 
 @app.exception_handler(RequestValidationError)

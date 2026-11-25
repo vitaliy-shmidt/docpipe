@@ -244,9 +244,20 @@ def _button_options(f: _Field) -> list[dict]:
     return options
 
 
-def _inspect_fields(
+@dataclass(frozen=True)
+class NativeWidget:
+    """One native widget as reported by inspect (`item`) plus its PDF objects (used by forms/fill)."""
+
+    item: dict
+    widget: pikepdf.Dictionary
+    field: pikepdf.Dictionary
+    siblings: tuple[pikepdf.Dictionary, ...]  # every widget of the same terminal field (incl. this one)
+
+
+def native_widgets(
     pdf: pikepdf.Pdf, boxes: list[PageBox], warnings: list[dict], max_fields: int
-) -> list[dict]:
+) -> list[NativeWidget]:
+    """Native widgets in reading order with the ids/refs/positions of the inspect contract."""
     acroform = pdf.Root.get("/AcroForm")
     if not isinstance(acroform, pikepdf.Dictionary):
         return []
@@ -308,7 +319,7 @@ def _inspect_fields(
             warnings.append(_warning(code, message, count=count))
 
     entries.sort(key=lambda e: (e[2].page, round(e[2].rect.y, 1), round(e[2].rect.x, 1)))
-    result = []
+    result: list[NativeWidget] = []
     for number, (f, attrs, w, index, count) in enumerate(entries, start=1):
         flags = int(w.obj.get("/F", 0))
         item = {
@@ -331,8 +342,14 @@ def _inspect_fields(
         if attrs["type"] in ("checkbox", "radio"):
             states = _on_states(w.obj)
             item["export_value"] = states[0] if states else None
-        result.append(item)
+        result.append(NativeWidget(item, w.obj, f.obj, tuple(f.widgets)))
     return result
+
+
+def _inspect_fields(
+    pdf: pikepdf.Pdf, boxes: list[PageBox], warnings: list[dict], max_fields: int
+) -> list[dict]:
+    return [n.item for n in native_widgets(pdf, boxes, warnings, max_fields)]
 
 
 def _plain_copy(pdf: pikepdf.Pdf) -> bytes:

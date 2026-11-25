@@ -1,6 +1,49 @@
 {
   "components": {
     "schemas": {
+      "Body_forms_fill_api_v1_documents_forms_fill_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "description": "The unchanged PDF template (sha256 from inspect).",
+            "title": "File",
+            "type": "string"
+          },
+          "images": {
+            "default": [],
+            "description": "PNG parts; each part's filename is the image_ref used in the manifest.",
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Images",
+            "type": "array"
+          },
+          "manifest": {
+            "description": "JSON document, schema x-docpipe-manifest-schema.",
+            "title": "Manifest",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Open or owner password; body only, never logged or returned.",
+            "title": "Password"
+          }
+        },
+        "required": [
+          "file",
+          "manifest"
+        ],
+        "title": "Body_forms_fill_api_v1_documents_forms_fill_post",
+        "type": "object"
+      },
       "Body_forms_inspect_api_v1_documents_forms_inspect_post": {
         "properties": {
           "detect": {
@@ -73,6 +116,19 @@
           "code": {
             "title": "Code",
             "type": "string"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "forms endpoints only, e.g. field_id, reason, permission, path - never submitted values",
+            "title": "Details"
           },
           "message": {
             "title": "Message",
@@ -807,11 +863,426 @@
   },
   "info": {
     "description": "Extract of DocPipe's generated OpenAPI document. Contract and behaviour: docs/forms-inspect.md. Authentication: Authorization: Bearer <api key> of a client with services.forms.",
-    "title": "DocPipe forms API (PDF4Fill)",
+    "title": "DocPipe forms API (PDF4Fill): inspect and fill",
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/documents/forms/fill": {
+      "post": {
+        "description": "Native fields by native_ref, overlay fields and PNG images by page + position (inspect coordinates), bundled Unicode fonts, auto-fit, no truncation. The manifest is a JSON string; its schema is in x-docpipe-manifest-schema. See docs/forms-fill.md.",
+        "operationId": "forms_fill_api_v1_documents_forms_fill_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_forms_fill_api_v1_documents_forms_fill_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The filled, flattened PDF (`Cache-Control: no-store`). An encrypted template yields an output with the same encryption and permissions."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`invalid_file`, `invalid_request`, `invalid_manifest`, `invalid_image`"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`unauthorized`"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`forms_disabled`"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`hash_mismatch`"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`file_too_large`, `limit_exceeded`"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`password_required`, `invalid_password`, `xfa_unsupported`, `permission_denied`, `signature_conflict`, `unknown_field`, `field_conflict`, `invalid_geometry`, `invalid_value`, `text_overflow`, `unsupported_characters`"
+          }
+        },
+        "summary": "Fill a PDF form template and return a flattened PDF (PDF4Fill, services.forms)",
+        "x-docpipe-manifest-schema": {
+          "$defs": {
+            "FillField": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "description": "Caller's id; echoed in error details only",
+                  "pattern": "^[A-Za-z0-9_.:\\-]{1,64}$",
+                  "title": "Id",
+                  "type": "string"
+                },
+                "image_ref": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[A-Za-z0-9_.:\\-]{1,64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Images: filename of one `images` part",
+                  "title": "Image Ref"
+                },
+                "input_name": {
+                  "anyOf": [
+                    {
+                      "maxLength": 1024,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "mode=native: optional check",
+                  "title": "Input Name"
+                },
+                "mode": {
+                  "enum": [
+                    "native",
+                    "overlay"
+                  ],
+                  "title": "Mode",
+                  "type": "string"
+                },
+                "native_ref": {
+                  "anyOf": [
+                    {
+                      "maxLength": 64,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "mode=native: from inspect",
+                  "title": "Native Ref"
+                },
+                "page": {
+                  "anyOf": [
+                    {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "mode=overlay: required; native: optional check",
+                  "title": "Page"
+                },
+                "position": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/FillPosition"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "mode=overlay: required; native: check"
+                },
+                "required": {
+                  "default": false,
+                  "title": "Required",
+                  "type": "boolean"
+                },
+                "style": {
+                  "$ref": "#/$defs/FillStyle"
+                },
+                "type": {
+                  "enum": [
+                    "text",
+                    "number",
+                    "date",
+                    "choice",
+                    "checkbox",
+                    "radio",
+                    "stamp_image",
+                    "signature_image"
+                  ],
+                  "title": "Type",
+                  "type": "string"
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "text/number/date/choice: string (pre-formatted by the caller); choice with multi_select: list; checkbox: bool or export value; radio: export value; images: unused",
+                  "title": "Value"
+                }
+              },
+              "required": [
+                "id",
+                "mode",
+                "type"
+              ],
+              "title": "FillField",
+              "type": "object"
+            },
+            "FillOutput": {
+              "additionalProperties": false,
+              "properties": {
+                "flatten": {
+                  "const": true,
+                  "default": true,
+                  "description": "Only flattened, print-ready output is supported",
+                  "title": "Flatten",
+                  "type": "boolean"
+                },
+                "preview": {
+                  "default": false,
+                  "description": "Same rendering plus a PREVIEW watermark on every page",
+                  "title": "Preview",
+                  "type": "boolean"
+                }
+              },
+              "title": "FillOutput",
+              "type": "object"
+            },
+            "FillPosition": {
+              "additionalProperties": false,
+              "description": "Visible page, points, origin top-left (the inspect coordinate system).",
+              "properties": {
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "title": "Height",
+                  "type": "number"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "title": "Width",
+                  "type": "number"
+                },
+                "x": {
+                  "minimum": 0,
+                  "title": "X",
+                  "type": "number"
+                },
+                "y": {
+                  "minimum": 0,
+                  "title": "Y",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "width",
+                "height"
+              ],
+              "title": "FillPosition",
+              "type": "object"
+            },
+            "FillStyle": {
+              "additionalProperties": false,
+              "description": "Fully resolved effective style of a text value (PDF4Fill resolves inheritance).",
+              "properties": {
+                "align": {
+                  "default": "left",
+                  "enum": [
+                    "left",
+                    "center",
+                    "right"
+                  ],
+                  "title": "Align",
+                  "type": "string"
+                },
+                "auto_fit": {
+                  "default": false,
+                  "description": "Shrink in 0.5 pt steps down to min_font_size",
+                  "title": "Auto Fit",
+                  "type": "boolean"
+                },
+                "color": {
+                  "default": "#000000",
+                  "description": "Hex RGB",
+                  "pattern": "^#[0-9A-Fa-f]{6}$",
+                  "title": "Color",
+                  "type": "string"
+                },
+                "font_family": {
+                  "default": "sans",
+                  "enum": [
+                    "sans",
+                    "serif",
+                    "mono"
+                  ],
+                  "title": "Font Family",
+                  "type": "string"
+                },
+                "font_size": {
+                  "default": 10.0,
+                  "description": "Points",
+                  "maximum": 72,
+                  "minimum": 4,
+                  "title": "Font Size",
+                  "type": "number"
+                },
+                "font_style": {
+                  "default": "normal",
+                  "enum": [
+                    "normal",
+                    "italic"
+                  ],
+                  "title": "Font Style",
+                  "type": "string"
+                },
+                "font_weight": {
+                  "default": "normal",
+                  "enum": [
+                    "normal",
+                    "bold"
+                  ],
+                  "title": "Font Weight",
+                  "type": "string"
+                },
+                "min_font_size": {
+                  "default": 6.0,
+                  "maximum": 72,
+                  "minimum": 4,
+                  "title": "Min Font Size",
+                  "type": "number"
+                },
+                "multiline": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Override; default: native flag, else false",
+                  "title": "Multiline"
+                }
+              },
+              "title": "FillStyle",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/FillField"
+              },
+              "title": "Fields",
+              "type": "array"
+            },
+            "output": {
+              "$ref": "#/$defs/FillOutput"
+            },
+            "schema_version": {
+              "const": "1",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "sha256": {
+              "description": "SHA-256 of the uploaded template (from inspect)",
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schema_version",
+            "sha256",
+            "fields"
+          ],
+          "title": "FillManifest",
+          "type": "object"
+        }
+      }
+    },
     "/api/v1/documents/forms/inspect": {
       "post": {
         "description": "Native fields, layout proposals, page text with positions, OCR for pages without a text layer, SHA-256 and security facts. See docs/forms-inspect.md.",

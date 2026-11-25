@@ -439,11 +439,14 @@ def test_capabilities_for_forms_clients(forms_client):
     assert body["services"] == {"documents": True, "ai": False, "prompt_lab": False, "assistant": False,
                                 "forms": True}
     assert body["features"] == ["extract_text", "convert_to_pdf", "ocr_fallback",
-                                "forms_inspect", "forms_detect", "forms_ocr"]
-    assert body["forms"] == {"schema_version": "1", "max_pages": 200, "max_fields": 2000, "max_ocr_pages": 20}
+                                "forms_inspect", "forms_detect", "forms_fill", "forms_ocr"]
+    assert body["forms"] == {"schema_version": "1", "max_pages": 200, "max_fields": 2000, "max_ocr_pages": 20,
+                             "fonts": {"sans": "Liberation Sans", "serif": "Liberation Serif",
+                                       "mono": "Liberation Mono"},
+                             "max_images": 10}
     only = forms_client.get(CAPABILITIES_URL, headers=auth_headers(FORMS_ONLY_KEY)).json()
     assert only["services"]["documents"] is False
-    assert only["features"] == ["forms_inspect", "forms_detect", "forms_ocr"]
+    assert only["features"] == ["forms_inspect", "forms_detect", "forms_fill", "forms_ocr"]
 
 
 def test_capabilities_hide_forms_ocr_when_server_ocr_is_disabled(forms_client):
@@ -451,7 +454,7 @@ def test_capabilities_hide_forms_ocr_when_server_ocr_is_disabled(forms_client):
     forms_client.app.state.settings = replace(
         settings, stirling=replace(settings.stirling, ocr=replace(settings.stirling.ocr, enabled=False)))
     body = forms_client.get(CAPABILITIES_URL, headers=auth_headers(FORMS_ONLY_KEY)).json()
-    assert body["features"] == ["forms_inspect", "forms_detect"]
+    assert body["features"] == ["forms_inspect", "forms_detect", "forms_fill"]
 
 
 def test_existing_document_endpoints_ignore_the_forms_flag(forms_client):

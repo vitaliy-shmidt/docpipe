@@ -51,6 +51,18 @@ STATUS_BY_CODE: dict[str, int] = {
     "invalid_password": 422,
     "xfa_unsupported": 422,
     "limit_exceeded": 413,
+    # Forms fill (Phase 2.2). `details` carries field ids/reasons, never values.
+    "invalid_manifest": 400,
+    "invalid_image": 400,
+    "hash_mismatch": 409,
+    "permission_denied": 422,
+    "signature_conflict": 422,
+    "unknown_field": 422,
+    "field_conflict": 422,
+    "invalid_geometry": 422,
+    "invalid_value": 422,
+    "text_overflow": 422,
+    "unsupported_characters": 422,
 }
 
 
@@ -60,8 +72,12 @@ class DocPipeError(Exception):
     `status_code` may be omitted; it is then looked up from STATUS_BY_CODE.
     """
 
-    def __init__(self, code: str, message: str, status_code: int | None = None) -> None:
+    def __init__(
+        self, code: str, message: str, status_code: int | None = None, details: dict | None = None
+    ) -> None:
         self.code = code
         self.message = message
+        # Optional, additive: only the forms endpoints set it; every other error body is unchanged.
+        self.details = details
         self.status_code = status_code or STATUS_BY_CODE.get(code, 500)
         super().__init__(message)

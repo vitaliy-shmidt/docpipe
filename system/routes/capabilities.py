@@ -10,6 +10,8 @@ from system.assistant.domains import ASSISTANT_DOMAINS
 from system.assistant.modes import ASSISTANT_MODES
 from system.auth import get_authenticated_client
 from system.config import ClientConfig, Settings
+from system.forms.fill import MAX_IMAGES as MAX_FILL_IMAGES
+from system.forms.fonts import DISPLAY_NAMES as FORM_FONTS
 from system.forms.inspect import SCHEMA_VERSION as FORMS_SCHEMA_VERSION
 from system.schemas import (
     CapabilitiesResponse,
@@ -62,7 +64,7 @@ def capabilities(
     # response_model (CapabilitiesResponse) cannot strip the added keys.
     base = response.model_dump()
     base_services = base.pop("services")
-    forms_features = ["forms_inspect", "forms_detect"]
+    forms_features = ["forms_inspect", "forms_detect", "forms_fill"]
     if settings.stirling.ocr.enabled:
         forms_features.append("forms_ocr")
     base["features"] = base["features"] + forms_features
@@ -74,6 +76,8 @@ def capabilities(
             max_pages=settings.forms.max_pages,
             max_fields=settings.forms.max_fields,
             max_ocr_pages=settings.forms.max_ocr_pages,
+            fonts=dict(FORM_FONTS),
+            max_images=MAX_FILL_IMAGES,
         ),
     )
     return JSONResponse(content=forms_response.model_dump())

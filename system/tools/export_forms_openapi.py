@@ -2,7 +2,7 @@
 
     python -m system.tools.export_forms_openapi [target]
 
-Writes docs/openapi/forms-inspect.openapi.json (default): the forms path(s) of
+Writes docs/openapi/forms.openapi.json (default): the forms path(s) of
 DocPipe's generated OpenAPI document plus exactly the component schemas they
 reference. tests/test_forms_ocr_detect.py fails when the committed file and the
 running application drift apart, so regenerate after changing
@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-DEFAULT_TARGET = Path(__file__).resolve().parents[2] / "docs" / "openapi" / "forms-inspect.openapi.json"
+DEFAULT_TARGET = Path(__file__).resolve().parents[2] / "docs" / "openapi" / "forms.openapi.json"
 FORMS_PREFIX = "/api/v1/documents/forms/"
 
 
@@ -48,7 +48,7 @@ def build() -> dict:
     return {
         "openapi": spec["openapi"],
         "info": {
-            "title": "DocPipe forms API (PDF4Fill)",
+            "title": "DocPipe forms API (PDF4Fill): inspect and fill",
             "version": spec["info"]["version"],
             "description": "Extract of DocPipe's generated OpenAPI document. Contract and behaviour: "
                            "docs/forms-inspect.md. Authentication: Authorization: Bearer <api key> of a "
