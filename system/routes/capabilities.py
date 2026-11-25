@@ -62,7 +62,10 @@ def capabilities(
     # response_model (CapabilitiesResponse) cannot strip the added keys.
     base = response.model_dump()
     base_services = base.pop("services")
-    base["features"] = base["features"] + ["forms_inspect"]
+    forms_features = ["forms_inspect", "forms_detect"]
+    if settings.stirling.ocr.enabled:
+        forms_features.append("forms_ocr")
+    base["features"] = base["features"] + forms_features
     forms_response = FormsCapabilitiesResponse(
         **base,
         services=FormsServiceFlags(**base_services, forms=True),
@@ -70,6 +73,7 @@ def capabilities(
             schema_version=FORMS_SCHEMA_VERSION,
             max_pages=settings.forms.max_pages,
             max_fields=settings.forms.max_fields,
+            max_ocr_pages=settings.forms.max_ocr_pages,
         ),
     )
     return JSONResponse(content=forms_response.model_dump())

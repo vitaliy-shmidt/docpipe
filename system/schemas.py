@@ -35,6 +35,7 @@ class FormsCapabilityInfo(BaseModel):
     schema_version: str
     max_pages: int
     max_fields: int
+    max_ocr_pages: int
 
 
 class CapabilitiesResponse(BaseModel):

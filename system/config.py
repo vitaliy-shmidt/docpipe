@@ -55,6 +55,8 @@ DEFAULT_MAX_FILE_SIZE_MB = 25
 # shared server; commercial limits stay in the calling application.
 DEFAULT_FORMS_MAX_PAGES = 200
 DEFAULT_FORMS_MAX_FIELDS = 2000
+# Phase 2.1b: pages per request sent to Stirling OCR (shared with other clients).
+DEFAULT_FORMS_MAX_OCR_PAGES = 20
 DEFAULT_STIRLING_TIMEOUT_SECONDS = 90
 
 # Ollama Keep-Alive tuning pass (see docs/staging-deployment.md "Ollama
@@ -221,6 +223,7 @@ class ServerSettings:
 class FormsSettings:
     max_pages: int = DEFAULT_FORMS_MAX_PAGES
     max_fields: int = DEFAULT_FORMS_MAX_FIELDS
+    max_ocr_pages: int = DEFAULT_FORMS_MAX_OCR_PAGES
 
 
 @dataclass(frozen=True)
@@ -494,11 +497,15 @@ def _parse_forms(raw_forms: object) -> FormsSettings:
         return FormsSettings()
     if not isinstance(raw_forms, dict):
         raise ConfigError("'forms' must be a mapping.")
-    unknown = set(raw_forms) - {"max_pages", "max_fields"}
+    unknown = set(raw_forms) - {"max_pages", "max_fields", "max_ocr_pages"}
     if unknown:
         raise ConfigError(f"forms has unknown keys: {sorted(unknown)}.")
     values = {}
-    for key, default in (("max_pages", DEFAULT_FORMS_MAX_PAGES), ("max_fields", DEFAULT_FORMS_MAX_FIELDS)):
+    for key, default in (
+        ("max_pages", DEFAULT_FORMS_MAX_PAGES),
+        ("max_fields", DEFAULT_FORMS_MAX_FIELDS),
+        ("max_ocr_pages", DEFAULT_FORMS_MAX_OCR_PAGES),
+    ):
         raw_value = raw_forms.get(key, default)
         if isinstance(raw_value, bool) or not isinstance(raw_value, int):
             raise ConfigError(f"forms.{key} must be an integer.")

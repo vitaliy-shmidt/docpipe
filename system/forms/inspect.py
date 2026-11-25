@@ -25,10 +25,11 @@ import logging
 from dataclasses import dataclass, field
 
 import pikepdf
-from pdfminer.high_level import extract_pages
-from pdfminer.layout import LAParams, LTTextContainer, LTTextLine
 
 from system.errors import DocPipeError
+from system.forms import detect as detect_mod
+from system.forms import layout as layout_mod
+from system.forms import ocr as ocr_mod
 from system.forms.geometry import PageBox, VisibleRect
 
 SCHEMA_VERSION = "1"
@@ -334,51 +335,100 @@ def _inspect_fields(
     return result
 
 
-def _pdfminer_copy(pdf: pikepdf.Pdf, boxes: list[PageBox]) -> bytes:
-    """Unencrypted in-memory copy with explicit MediaBox and /Rotate 0 on every page.
-
-    pdfminer rotates by /Rotate and shifts by the MediaBox origin; neutralising
-    the rotation makes its coordinates plain user space (+ MediaBox origin), so
-    text and widgets share one mapping (PageBox.to_visible). The original upload
-    is never modified.
-    """
-    for page, box in zip(pdf.pages, boxes):
-        page.obj.MediaBox = pikepdf.Array(list(box.mediabox))
-        page.obj.Rotate = 0
+def _plain_copy(pdf: pikepdf.Pdf) -> bytes:
+    """Unencrypted in-memory copy for layout analysis; the upload itself is never modified."""
     out = io.BytesIO()
     pdf.save(out, encryption=False)
     return out.getvalue()
 
 
-def _inspect_text(copy: bytes, boxes: list[PageBox]) -> list[tuple[str, list[dict]]]:
-    pages: list[tuple[str, list[dict]]] = []
-    for number, layout in enumerate(extract_pages(io.BytesIO(copy), laparams=LAParams()), start=1):
-        box = boxes[number - 1]
-        mx, my = box.mediabox[0], box.mediabox[1]
-        blocks, texts = [], []
-        for element in layout:
-            if not isinstance(element, LTTextContainer):
-                continue
-            box_text = element.get_text().strip()
-            if not box_text:
-                continue
-            texts.append(box_text)
-            lines = [ln for ln in element if isinstance(ln, LTTextLine)] or [element]
-            for line in lines:
-                line_text = line.get_text().strip()
-                if not line_text:
-                    continue
-                x0, y0, x1, y1 = line.bbox
-                visible, _ = box.clip(box.to_visible(x0 + mx, y0 + my, x1 + mx, y1 + my))
-                if visible is not None:
-                    blocks.append({"text": line_text, "position": visible.as_dict()})
-        blocks.sort(key=lambda b: (round(b["position"]["y"], 1), b["position"]["x"]))
-        pages.append(("\n".join(texts), blocks))
-    return pages
+def _apply_ocr(pdf, boxes, layouts, sources, textless, runner, max_ocr_pages, warnings) -> dict:
+    """OCR the text-less pages; updates layouts/sources in place. Returns the `ocr` block."""
+    to_ocr = textless[:max_ocr_pages]
+    info: dict = {"status": "applied", "pages": []}
+    if len(textless) > len(to_ocr):
+        info["status"] = "partial"
+        warnings.append(_warning("ocr_page_limit", "More pages need OCR than allowed; the remaining pages "
+                                 "were not processed.", count=len(textless) - len(to_ocr)))
+    try:
+        result = ocr_mod.run(pdf, boxes, to_ocr, runner)
+    except DocPipeError as exc:
+        warnings.append(_warning("ocr_failed", "OCR could not be performed; pages without a text layer "
+                                 "are returned without text.", reason=exc.code))
+        return {"status": "failed", "pages": [], "reason": exc.code}
+    ocr_layouts = layout_mod.extract(result.pdf, {pos: page.post for pos, page in result.pages.items()})
+    for pos, page in result.pages.items():
+        index = page.page - 1
+        found = ocr_layouts[pos]
+        has_text = bool(found.text.strip())
+        info["pages"].append({"page": page.page, "geometry": page.geometry, "text_found": has_text})
+        if not has_text:
+            warnings.append(_warning("ocr_no_text", "OCR found no text on the page.", page=page.page))
+            continue
+        layouts[index], sources[index] = found, "ocr"
+        if page.geometry == "mismatch":
+            warnings.append(_warning("ocr_geometry_mismatch", "The OCR output does not match the page "
+                                     "geometry; its text is returned without positions.", page=page.page))
+    return info
 
 
-def inspect_pdf(data: bytes, password: str | None = None, *, max_pages: int, max_fields: int) -> dict:
-    """Inspect one PDF. Raises DocPipeError for documents that cannot be inspected."""
+def _detected_fields(layouts, boxes, fields, warnings) -> list[dict]:
+    native_by_page: dict[int, list[VisibleRect]] = {}
+    for f in fields:
+        p = f["position"]
+        native_by_page.setdefault(f["page"], []).append(VisibleRect(p["x"], p["y"], p["width"], p["height"]))
+    result = []
+    for index, layout in sorted(layouts.items()):
+        number = index + 1
+        box = boxes[index]
+        candidates, truncated = detect_mod.detect(number, layout, box.width, box.height,
+                                                  native_by_page.get(number, []))
+        if truncated:
+            warnings.append(_warning("detection_limit", "The page has more field proposals than allowed; "
+                                     "only the most likely ones are returned.", page=number))
+        for c in candidates:
+            result.append({
+                "id": f"detected_{len(result) + 1:03d}",
+                "name": c.label_text,
+                "input_name": None,
+                "native_ref": None,
+                "field_ref": None,
+                "page": number,
+                "position": c.rect.as_dict(),
+                "source": "detected",
+                "type": c.type,
+                "detection": c.detection,
+                "confidence": c.confidence,
+                "label": ({"text": c.label.text, "position": c.label.rect.as_dict()}
+                          if c.label is not None else None),
+                "multiline": c.multiline,
+                "options": [],
+            })
+    if result:
+        low = sum(1 for f in result if f["confidence"] < detect_mod.LOW_CONFIDENCE)
+        warnings.append(_warning("fields_detected", "Field proposals were detected from the page layout; "
+                                 "they must be reviewed and confirmed before use.", count=len(result),
+                                 low_confidence_count=low))
+    return result
+
+
+def inspect_pdf(
+    data: bytes,
+    password: str | None = None,
+    *,
+    max_pages: int,
+    max_fields: int,
+    ocr: ocr_mod.OcrRunner | None = None,
+    ocr_skipped: str = "disabled",
+    max_ocr_pages: int = 20,
+    detect: bool = True,
+) -> dict:
+    """Inspect one PDF. Raises DocPipeError for documents that cannot be inspected.
+
+    `ocr` runs OCR on pages without a text layer (None: not available; then
+    `ocr_skipped` - "disabled" or "off" - is reported). `detect` adds layout
+    proposals for static fields.
+    """
     sha256 = hashlib.sha256(data).hexdigest()
     pdf = _open(data, password)
     try:
@@ -425,35 +475,54 @@ def inspect_pdf(data: bytes, password: str | None = None, *, max_pages: int, max
             warnings.append(_warning("form_filling_not_permitted",
                                      "The PDF's permissions do not allow filling in form fields."))
 
+        layouts: dict[int, layout_mod.PageLayout] = {}
+        sources = ["none"] * page_count
+        ocr_info: dict = {"status": "not_permitted", "pages": []}
+        detected: list[dict] = []
         text_allowed = permissions is None or permissions["extract_text"]
-        if text_allowed:
-            try:
-                page_texts = _inspect_text(_pdfminer_copy(pdf, boxes), boxes)
-            except Exception:  # noqa: BLE001 - layout analysis must not fail the structural result
-                page_texts = [("", [])] * page_count
-                warnings.append(_warning("text_extraction_failed", "The page text could not be extracted."))
-        else:
-            page_texts = [("", [])] * page_count
+        if not text_allowed:
             warnings.append(_warning("text_extraction_not_permitted",
                                      "The PDF's permissions do not allow text extraction; "
-                                     "no text is returned."))
-        if len(page_texts) != page_count:  # defensive: pdfminer skipped pages
-            page_texts = (page_texts + [("", [])] * page_count)[:page_count]
+                                     "no text, OCR or field proposals are returned."))
+        else:
+            try:
+                posts = {i: layout_mod.identity for i in range(page_count)}
+                layouts = layout_mod.extract(_plain_copy(pdf), posts)
+            except Exception:  # noqa: BLE001 - layout analysis must not fail the structural result
+                layouts = {}
+                warnings.append(_warning("text_extraction_failed", "The page text could not be extracted."))
+            textless = [i for i in range(page_count) if i in layouts and not layouts[i].text.strip()]
+            for i in range(page_count):
+                if i in layouts and layouts[i].text.strip():
+                    sources[i] = "embedded"
+            if not layouts:
+                ocr_info = {"status": "failed", "pages": [], "reason": "text_extraction_failed"}
+            elif not textless:
+                ocr_info = {"status": "not_needed", "pages": []}
+            elif ocr is None:
+                ocr_info = {"status": ocr_skipped, "pages": []}
+            else:
+                ocr_info = _apply_ocr(pdf, boxes, layouts, sources, textless, ocr, max_ocr_pages, warnings)
+            processed = {p["page"] for p in ocr_info["pages"]}
+            for i in textless:
+                if sources[i] == "none" and i + 1 not in processed:
+                    warnings.append(_warning("no_text_layer", "The page has no extractable text.",
+                                             page=i + 1))
+            if detect and layouts:
+                detected = _detected_fields(layouts, boxes, fields, warnings)
 
         pages = []
-        for number, (box, (text, blocks)) in enumerate(zip(boxes, page_texts), start=1):
-            source = "embedded" if text.strip() else "none"
-            if source == "none" and text_allowed:
-                warnings.append(_warning("no_text_layer", "The page has no extractable text (OCR is not "
-                                         "applied by this endpoint).", page=number))
+        for index, box in enumerate(boxes):
+            found = layouts.get(index)
+            has_text = found is not None and sources[index] != "none"
             pages.append({
-                "page": number,
+                "page": index + 1,
                 "width": round(box.width, 2),
                 "height": round(box.height, 2),
                 "rotation": box.rotation,
-                "text_source": source,
-                "text": text,
-                "text_blocks": blocks,
+                "text_source": sources[index],
+                "text": found.text if has_text else "",
+                "text_blocks": found.blocks() if has_text else [],
             })
 
         return {
@@ -462,7 +531,9 @@ def inspect_pdf(data: bytes, password: str | None = None, *, max_pages: int, max
             "page_count": page_count,
             "text": "\n\n".join(p["text"] for p in pages if p["text"]),
             "pages": pages,
-            "fields": fields,
+            "fields": fields + detected,
+            "ocr": ocr_info,
+            "detection": {"enabled": bool(detect and text_allowed), "count": len(detected)},
             "security": security,
             "warnings": warnings,
         }

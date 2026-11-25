@@ -438,10 +438,20 @@ def test_capabilities_for_forms_clients(forms_client):
     body = forms_client.get(CAPABILITIES_URL, headers=auth_headers(FORMS_KEY)).json()
     assert body["services"] == {"documents": True, "ai": False, "prompt_lab": False, "assistant": False,
                                 "forms": True}
-    assert body["features"] == ["extract_text", "convert_to_pdf", "ocr_fallback", "forms_inspect"]
-    assert body["forms"] == {"schema_version": "1", "max_pages": 200, "max_fields": 2000}
+    assert body["features"] == ["extract_text", "convert_to_pdf", "ocr_fallback",
+                                "forms_inspect", "forms_detect", "forms_ocr"]
+    assert body["forms"] == {"schema_version": "1", "max_pages": 200, "max_fields": 2000, "max_ocr_pages": 20}
     only = forms_client.get(CAPABILITIES_URL, headers=auth_headers(FORMS_ONLY_KEY)).json()
-    assert only["services"]["documents"] is False and only["features"] == ["forms_inspect"]
+    assert only["services"]["documents"] is False
+    assert only["features"] == ["forms_inspect", "forms_detect", "forms_ocr"]
+
+
+def test_capabilities_hide_forms_ocr_when_server_ocr_is_disabled(forms_client):
+    settings = forms_client.app.state.settings
+    forms_client.app.state.settings = replace(
+        settings, stirling=replace(settings.stirling, ocr=replace(settings.stirling.ocr, enabled=False)))
+    body = forms_client.get(CAPABILITIES_URL, headers=auth_headers(FORMS_ONLY_KEY)).json()
+    assert body["features"] == ["forms_inspect", "forms_detect"]
 
 
 def test_existing_document_endpoints_ignore_the_forms_flag(forms_client):
@@ -481,12 +491,13 @@ def test_config_forms_flag_defaults_to_false(tmp_path, monkeypatch):
 
 
 def test_config_forms_limits(tmp_path, monkeypatch):
-    settings = _load(tmp_path, monkeypatch, "forms: {max_pages: 50, max_fields: 300}\n")
-    assert settings.forms == FormsSettings(max_pages=50, max_fields=300)
+    settings = _load(tmp_path, monkeypatch, "forms: {max_pages: 50, max_fields: 300, max_ocr_pages: 5}\n")
+    assert settings.forms == FormsSettings(max_pages=50, max_fields=300, max_ocr_pages=5)
 
 
 @pytest.mark.parametrize("block", ["forms: 5", "forms: {max_pages: 0}", "forms: {max_pages: 'many'}",
-                                   "forms: {max_fields: true}", "forms: {unknown: 1}"])
+                                   "forms: {max_fields: true}", "forms: {unknown: 1}",
+                                   "forms: {max_ocr_pages: 0}", "forms: {max_ocr_pages: 2.5}"])
 def test_config_forms_validation(tmp_path, monkeypatch, block):
     with pytest.raises(ConfigError):
         _load(tmp_path, monkeypatch, block + "\n")

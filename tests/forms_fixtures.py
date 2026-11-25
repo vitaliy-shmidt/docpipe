@@ -268,6 +268,158 @@ def many_pages(count: int = 5) -> bytes:
     return _bytes(pdf)
 
 
+# --- Phase 2.1b: static forms and scans ---------------------------------------------------------
+
+# Static form on a landscape display canvas of 842 x 595 pt (bottom-left origin, as drawn).
+# GROUND TRUTH (visible coordinates, top-left origin) is listed in STATIC_FORM_EXPECTED; the
+# decoys in STATIC_FORM_DECOYS must NOT be proposed.
+STATIC_CANVAS = (842.0, 595.0)
+
+
+def _static_form_ops() -> bytes:
+    def text(x, y, s, size=11):
+        return f"BT /F1 {size} Tf {x} {y} Td ({s}) Tj ET\n"
+
+    def line(x0, y0, x1, y1):
+        return f"0.8 w {x0} {y0} m {x1} {y1} l S\n"
+
+    def rect(x, y, w, h):
+        return f"0.8 w {x} {y} {w} {h} re S\n"
+
+    ops = [
+        rect(15, 15, 812, 565),  # decoy: page frame
+        text(50, 555, "Antrag auf Mitgliedschaft", 14), line(50, 551, 230, 551),  # decoy: underlined heading
+        line(20, 535, 822, 535),  # decoy: page-wide separator
+        text(50, 505, "Name:"), line(100, 502, 330, 502),  # 1 underline, label left
+        text(400, 505, "Geburtsdatum: ____________"),  # 2 placeholder
+        text(50, 470, "Strasse und Hausnummer"), rect(50, 440, 280, 20),  # 3 box, label above
+        text(400, 447, "PLZ / Ort:"), rect(470, 440, 200, 20),  # 4 box, label left
+        text(50, 410, "Bemerkungen"), rect(50, 330, 520, 70),  # 5 multi-line box
+        rect(50, 300, 12, 12), text(68, 302, "Ja"),  # 6 checkbox
+        rect(110, 300, 12, 12), text(128, 302, "Nein"),  # 7 checkbox
+        line(450, 220, 700, 220), text(460, 206, "Ort, Datum, Unterschrift"),  # 8 signature line
+        # decoy: a box that already contains text
+        rect(50, 150, 300, 40), text(55, 165, "Hinweis: Bitte vollst\xe4ndig ausf\xfcllen."),
+    ]
+    for x in (450, 600, 750):  # decoy: table grid drawn from single lines
+        ops.append(line(x, 100, x, 160))
+    for y in (100, 130, 160):
+        ops.append(line(450, y, 750, y))
+    ops += [text(455, 140, "Position"), text(605, 140, "Betrag")]
+    return "".join(ops).encode("latin-1")
+
+
+# (detection, type, label, x, y, width, height) in visible coordinates of the 842 x 595 display;
+# None = derived from glyph boxes (placeholder), checked separately.
+STATIC_FORM_EXPECTED = [
+    ("underline", "text", "Name", 100.0, 77.0, 230.0, 16.0),
+    ("placeholder", "text", "Geburtsdatum", None, None, None, None),
+    ("box", "text", "Strasse und Hausnummer", 50.0, 135.0, 280.0, 20.0),
+    ("box", "text", "PLZ / Ort", 470.0, 135.0, 200.0, 20.0),
+    ("box", "text", "Bemerkungen", 50.0, 195.0, 520.0, 70.0),
+    ("checkbox", "checkbox", "Ja", 50.0, 283.0, 12.0, 12.0),
+    ("checkbox", "checkbox", "Nein", 110.0, 283.0, 12.0, 12.0),
+    ("underline", "text", "Ort, Datum, Unterschrift", 450.0, 359.0, 250.0, 16.0),
+]
+# decoy areas (x, y, width, height) in visible coordinates - no proposal may overlap them
+STATIC_FORM_DECOYS = {
+    "heading_underline": (50.0, 30.0, 180.0, 14.0),
+    "separator": (20.0, 58.0, 802.0, 2.0),
+    "text_box": (50.0, 405.0, 300.0, 40.0),
+    "table": (450.0, 435.0, 300.0, 60.0),
+}
+
+
+def _static_page(pdf, mediabox, rotate=None, cropbox=None, cm=None):
+    page = pdf.add_blank_page(page_size=(mediabox[2] - mediabox[0], mediabox[3] - mediabox[1]))
+    page.obj.MediaBox = Array(list(mediabox))
+    ops = _static_form_ops()
+    if cm is not None:
+        ops = b"q " + cm.encode("ascii") + b" cm\n" + ops + b"Q\n"
+    page.obj.Contents = pdf.make_stream(ops)
+    page.obj.Resources = Dictionary(Font=Dictionary(F1=_helvetica(pdf)))
+    if rotate is not None:
+        page.obj.Rotate = rotate
+    if cropbox is not None:
+        page.obj.CropBox = Array(list(cropbox))
+    return page
+
+
+def static_form() -> bytes:
+    """The static form on an unrotated landscape page (842 x 595)."""
+    pdf = pikepdf.new()
+    _static_page(pdf, (0, 0, 842, 595))
+    return _bytes(pdf)
+
+
+def static_form_rotated() -> bytes:
+    """The same form on a PORTRAIT page with /Rotate 90, drawn so that it displays upright.
+
+    For /Rotate 90 the viewer turns the page clockwise: display (X, Y) = user (y, 595 - x), so the
+    content is drawn with the inverse matrix  x = 595 - Y, y = X  ->  cm [0 1 -1 0 595 0].
+    """
+    pdf = pikepdf.new()
+    _static_page(pdf, (0, 0, 595, 842), rotate=90, cm="0 1 -1 0 595 0")
+    return _bytes(pdf)
+
+
+def static_form_cropbox() -> bytes:
+    """The same form shifted by (30, 40) inside a larger MediaBox whose CropBox shows exactly it."""
+    pdf = pikepdf.new()
+    _static_page(pdf, (10, 20, 900, 660), cropbox=(30, 40, 872, 635), cm="1 0 0 1 30 40")
+    return _bytes(pdf)
+
+
+def mixed_native_static() -> bytes:
+    """A native text field drawn ON an underline, plus a second, purely static underline."""
+    pdf = _new()
+    page = _page(pdf, texts=[(50, 760, "Vorname:"), (50, 700, "Nachname:")])
+    ops = page.obj.Contents.read_bytes() + b"0.8 w 120 752 m 320 752 l S\n0.8 w 120 692 m 320 692 l S\n"
+    page.obj.Contents = pdf.make_stream(ops)
+    text_field(pdf, page, "vorname", (120, 752, 320, 770))
+    return _bytes(pdf)
+
+
+def _scan_image(pdf):
+    """A grey 'scan' bitmap (no text anywhere)."""
+    w, h = 60, 85
+    raw = bytes(((x * 7 + y * 3) % 64) + 160 for y in range(h) for x in range(w))
+    image = pikepdf.Stream(pdf, raw)
+    image.Type, image.Subtype = Name.XObject, Name.Image
+    image.Width, image.Height, image.ColorSpace, image.BitsPerComponent = w, h, Name.DeviceGray, 8
+    return image
+
+
+def _scan_page(pdf, mediabox=(0, 0, 595, 842), rotate=None, cropbox=None):
+    width, height = mediabox[2] - mediabox[0], mediabox[3] - mediabox[1]
+    page = pdf.add_blank_page(page_size=(width, height))
+    page.obj.MediaBox = Array(list(mediabox))
+    page.obj.Resources = Dictionary(XObject=Dictionary(Im1=_scan_image(pdf)))
+    page.obj.Contents = pdf.make_stream(
+        f"q {width} 0 0 {height} {mediabox[0]} {mediabox[1]} cm /Im1 Do Q\n".encode("ascii"))
+    if rotate is not None:
+        page.obj.Rotate = rotate
+    if cropbox is not None:
+        page.obj.CropBox = Array(list(cropbox))
+    return page
+
+
+def scan_pages() -> bytes:
+    """p1 text, p2 A4 scan, p3 A4 scan with /Rotate 90, p4 scan with offset MediaBox and CropBox."""
+    pdf = pikepdf.new()
+    _page(pdf, texts=[(50, 760, "Deckblatt mit Text")])
+    _scan_page(pdf)
+    _scan_page(pdf, rotate=90)
+    _scan_page(pdf, mediabox=(10, 20, 605, 862), cropbox=(40, 60, 575, 822))
+    return _bytes(pdf)
+
+
+def scan_encrypted() -> bytes:
+    pdf = pikepdf.new()
+    _scan_page(pdf)
+    return _bytes(pdf, encryption=pikepdf.Encryption(user=USER_PASSWORD, owner=OWNER_PASSWORD, R=6))
+
+
 REFERENCE_PDFS = {
     "basic-form.pdf": basic_form,
     "rotated-pages.pdf": rotated_pages,
@@ -281,6 +433,12 @@ REFERENCE_PDFS = {
     "xfa-dynamic.pdf": xfa_dynamic,
     "invalid-rotation.pdf": invalid_rotation,
     "five-pages.pdf": many_pages,
+    "static-form.pdf": static_form,
+    "static-form-rotated.pdf": static_form_rotated,
+    "static-form-cropbox.pdf": static_form_cropbox,
+    "mixed-native-static.pdf": mixed_native_static,
+    "scan-pages.pdf": scan_pages,
+    "scan-encrypted.pdf": scan_encrypted,
 }
 
 

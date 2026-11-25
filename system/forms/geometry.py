@@ -112,12 +112,17 @@ class PageBox:
             return VisibleRect(w - x1, y0, x1 - x0, y1 - y0)
         return VisibleRect(h - y1, w - x1, y1 - y0, x1 - x0)  # 270
 
-    def clip(self, rect: VisibleRect) -> tuple[VisibleRect | None, bool]:
-        """Clip to the visible page. Returns (rect or None if fully outside, was_clipped)."""
+    def clip(self, rect: VisibleRect, keep_lines: bool = False) -> tuple[VisibleRect | None, bool]:
+        """Clip to the visible page. Returns (rect or None if fully outside, was_clipped).
+
+        A rectangle without area counts as outside - except, with `keep_lines`, a
+        line of zero thickness (stroked rules in the page layout) that lies on the page.
+        """
         tolerance = 0.5
         x0, y0 = max(rect.x, 0.0), max(rect.y, 0.0)
         x1, y1 = min(rect.x + rect.width, self.width), min(rect.y + rect.height, self.height)
-        if x1 - x0 <= 0 or y1 - y0 <= 0:
+        w, h = x1 - x0, y1 - y0
+        if w < 0 or h < 0 or (w == 0 and h == 0) or (not keep_lines and (w == 0 or h == 0)):
             return None, True
         clipped = (
             rect.x < -tolerance
