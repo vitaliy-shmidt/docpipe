@@ -704,6 +704,89 @@ For contracts compare both latency and extracted business fields. A faster
 result that loses notice, renewal, provider or price information is a
 regression.
 
+## Planned next feature — Document Evidence & Source Mapping
+
+**TODO, prioritized before HubDix general entity API / UEP implementation (2026-11-17).** Pilot customer requests traceable contract extraction suggestions.
+
+- [ ] Preserve 1-based PDF page boundaries and provenance through text extraction, including scanned PDFs via existing Stirling OCR; do not rewrite persisted original text.
+- [ ] Return an optional verified page number and short verbatim source excerpt per extracted field. Match deterministically against page text; mark ambiguous or missing evidence instead of inventing pages. No extra LLM call for page lookup.
+- [ ] Preserve provenance through normalization, passage selection and chunk/merge; maintain backward compatibility for existing consumers and text-only inputs.
+- [ ] Keep feature reusable across document types; contract import in HubDix is first consumer. Test digital/scanned/mixed PDFs, duplicate passages, cross-page clauses and existing extraction regressions; document request/response and limitations together with implementation.
+- [ ] Later, independently: page navigation in HubDix, normalized bounding boxes and visual highlighting. JumpQR's overlay approach is a reference, not a text extraction implementation.
+
+First milestone is verified page references and excerpts; no coordinate implementation required for that milestone. No production changes or implementation in this planning entry.
+
+## Planned extension — External AI providers & enforceable usage limits
+
+**TODO (2026-11-23).** Add optional external AI APIs alongside the existing
+local Ollama provider. This is a separate implementation phase; it does not
+replace the prioritized Document Evidence & Source Mapping milestone above.
+
+### Provider abstraction and routing
+
+- [ ] Extend the existing `ModelProfile.provider` and central resolver with
+  a provider-neutral interface and adapters. Keep Ollama fully supported;
+  implement OpenAI first and allow additional providers (e.g. Anthropic or
+  OpenAI-compatible APIs) later without changing consumer endpoints.
+- [ ] Configure provider connections, models, capabilities, timeouts and
+  maximum output tokens server-side; preserve per-client/per-mode profile
+  overrides and startup validation. External providers are opt-in per
+  client and mode; local-only remains the default. A deployment may use
+  external AI exclusively without installing/running Ollama.
+- [ ] Preserve the existing API contracts, prompt registry, JSON Schema
+  validation, extraction optimization, deadlines and bounded repair logic
+  for analyze, Prompt Lab and assistant. Keep Stirling extraction/OCR local
+  and independent. Never silently send data externally as a fallback.
+- [ ] Keep provider credentials server-side in environment secrets or
+  secret mounts; never expose them to clients or logs. Restrict external
+  transmission to approved providers, modes and clients; document data
+  minimization, retention and privacy requirements before enabling them.
+
+### Mandatory usage and budget enforcement
+
+- [ ] Configure hard limits globally, per provider/model/profile and per
+  authenticated DocPipe client (e.g. HubDix, PDF2Fill); all applicable
+  limits must pass. Support requests, input/output/total tokens, monetary
+  spend, per-call maximums, daily/monthly periods and rate/concurrency caps.
+  Define explicit currency, period boundaries and reset semantics.
+- [ ] Use a minimal durable, transactional usage ledger (storage choice to
+  be evaluated, e.g. SQLite for single-instance deployment; shared storage
+  for multiple instances). This is a deliberate exception to the current
+  stateless design, limited to quota/accounting metadata: no document,
+  prompt, response, persistent job, or business-data storage.
+- [ ] Before **each actual outbound model call**, atomically reserve its
+  conservative maximum token/cost allowance against every applicable hard
+  limit; reject before sending data if the reservation cannot be made.
+  Include chunk calls, repairs, retries, fallbacks and Prompt Lab calls.
+  Reconcile reservations against provider-reported usage and configured,
+  versioned pricing; track actual/estimated/unresolved usage separately.
+  Missing pricing or uncertain usage must not bypass a hard budget;
+  retain conservative reservations until reconciliation. Fail closed when
+  accounting is unavailable. Cover concurrent requests and restarts.
+- [ ] Provide configurable warning thresholds (e.g. 80%/90%), a hard stop
+  at the configured limit, and a normalized quota-exceeded error with
+  safe reset information. No automatic paid-provider switching or overage.
+  Optional local fallback only when explicitly configured and permitted.
+- [ ] Expose authenticated usage/remaining-limit reporting scoped to the
+  client, with provider/model/mode and period breakdowns; administrative
+  configuration and global reporting remain restricted. Record only
+  accounting metadata, never secrets or document contents. Costs are
+  estimates unless reconciled with the provider's billing records.
+
+### Acceptance and rollout
+
+- [ ] Mock external APIs in tests; verify local-only compatibility, external-only
+  deployments, authorization, schema validation, timeout/error mapping,
+  no external transmission without permission, exact limit boundaries,
+  concurrent reservations, restart persistence, unknown usage, and
+  counting every repair/chunk/fallback attempt. Verify that a blocked
+  request produces no outbound paid API call.
+- [ ] Compare extraction quality, latency, token usage and estimated cost
+  with the existing local baseline using synthetic or approved documents;
+  document configuration, pricing assumptions, quota behavior and rollback.
+- [ ] Release only after hard-limit enforcement and privacy controls pass;
+  no production provider activation or paid calls during this planning step.
+
 ## Out of scope for this optimization pass
 
 - RAG / embeddings / vector database;
