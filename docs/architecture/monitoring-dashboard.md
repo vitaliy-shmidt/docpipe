@@ -6,11 +6,9 @@ Status (26.11.2026, Branch `feature/monitoring-dashboard`, Basis `origin/main` =
 |---|---|
 | M1 Bestandsanalyse und Konzept | **freigegeben** (26.11.2026), Entscheidungen in §11 |
 | M2 Monitoring Foundation | **abgenommen** (26.11.2026), §13 |
-| M3 Secure Monitoring Access | **implementiert und lokal getestet** (§14), nicht deployt, nicht in `main` |
-| M4–M7 | nicht begonnen – jeweils eigene Freigabe |
-
-M3 enthält Login, MFA, Sessions und eine geschützte Dashboard-Shell, aber
-**keine** Statistik- oder Performance-Dashboards (M4).
+| M3 Secure Monitoring Access | **abgenommen** (26.11.2026), §14 |
+| M4 Dashboard und Live-Daten | **implementiert und lokal getestet** (§15, API: [monitoring-api.md](monitoring-api.md)), Draft-PR #6 für die GitHub-CI, nicht in `main`, nicht deployt |
+| M5–M7 | nicht begonnen – jeweils eigene Freigabe |
 Issue: [#3](https://github.com/vitaliy-shmidt/docpipe/issues/3).
 Bezüge: [#2](https://github.com/vitaliy-shmidt/docpipe/issues/2) (AI Connectors),
 [#4](https://github.com/vitaliy-shmidt/docpipe/issues/4) (Document Evidence & Source Mapping).
@@ -1128,3 +1126,128 @@ eigens freizugebende Aktivierung gilt:
 - Sessions sind nicht an die IP gebunden (mobile Netze, VPN-Wechsel). Eine IP-Bindung wäre optional nachrüstbar.
 - Die Erkennung der Uvicorn-Proxy-Header deckt CLI-Starts ab. Andere Launcher, etwa Gunicorn mit Uvicorn-Workern, sind durch die Deploy-Anforderung abgedeckt, nicht technisch erzwungen.
 - Synchrone Probes im Collector-Thread (aus M2) bleiben ein dokumentiertes Performance-Risiko und Teil der M7-Lasttests.
+
+---
+
+## 15. Umsetzung Phase M4 – Dashboard und Live-Daten
+
+Hier steht der tatsächlich implementierte Stand; die Details der API stehen in
+[monitoring-api.md](monitoring-api.md).
+
+### 15.1 Bereiche
+
+| Bereich | Route | Inhalt |
+|---|---|---|
+| Übersicht | `/monitor` | Dienststatus (DocPipe, Collector, Ollama, Stirling); KPIs (Anfragen, aktiv, Erfolgs- und Fehlerquote, Ø, Median, P95, P99, Laufzeit); Zeitreihen (Anfragen, Antwortzeit, pro Client, Serverlast); Systemkacheln mit Herkunft; Build; Datenqualität |
+| Live-Aktivität | `/monitor/activity` | laufende Requests (aller Worker, veraltete Snapshots markiert) und abgeschlossene Requests mit Schritten; Filter Client, Dienst, Status, Zeitraum; Cursor-Pagination |
+| Projekte & Clients | `/monitor/clients` | Anteil, Verlauf pro Client, Vergleich mit dem Vorzeitraum, Tabelle mit allen Kennzahlen, Nutzung nach Dienst; nicht authentifizierte Requests separat |
+| Performance | `/monitor/performance` | Request-Dauer (Ø, Median, P95, P99, Min/Max, Anzahl, Fehlerquote); pro Schritt dieselben Werte; Ollama-Teilzeiten (von Ollama gemeldet); Hinweis auf inklusive bzw. exklusive Dauer |
+| Server | `/monitor/server` | Dienststatus, Kacheln (Host, Container, Prozess, Dateisystem, Netz-Namespace, GPU) mit Herkunft und Status; Verläufe CPU, Speicher, Netz, freier Plattenplatz |
+| Sicherheit | `/monitor/security` | Audit-Kennzahlen nach Kategorie, Verlauf, eigene aktive Sessions, Ereignisliste (paginiert) – nur lesend |
+| Ollama, Stirling PDF | – | deaktiviert, „geplant M5“; allgemeiner Status in Übersicht und Server |
+| Logs / KI-Connectoren | – | deaktiviert, „geplant M6“ bzw. „#2“ |
+
+Es gibt keine Administration, keine Steuerung und keine Änderung von Konfigurationen.
+
+### 15.2 Technik
+
+- **Gleiche Architektur wie M3:** eigene ASGI-App, Jinja2, Bootstrap 5.3.3, Bootstrap-Icons-
+  Teilmenge und **Chart.js 4.4.7**. Alles wird lokal ausgeliefert, npm-Integrität und SHA-256
+  sind dokumentiert, Lizenzen liegen bei. Kein Build-Schritt, keine Node-Laufzeit im Image.
+- **Datenschicht** `system/monitoring/web/dashboard.py`:
+  - Lesende Verbindung (`mode=ro`, `query_only`). Im WAL-Modus blockiert sie den Collector
+    nicht; getestet mit einem offenen Schreib-Lock.
+  - Zeitbudget von 3 s pro Abfrage.
+  - Ausschließlich validierte Filter.
+- **Eine Quelle pro Antwort**, damit es keine Doppelzählung gibt: Rohdaten (≤ 1 h), Minuten-Rollups
+  (≤ 24 h) oder Stunden-Rollups, mit höchstens 120 Punkten. Rollup-Zeiträume beginnen am
+  Bucket-Anfang (`effective_start_ms`).
+- **Lücke gegenüber echter Null:** Ein Bucket ist nur dann 0, wenn der Collector darin
+  Heartbeats geschrieben hat; sonst `null`. Abdeckungsgrad pro Bucket; Minuten nach dem
+  letzten Heartbeat gelten als „noch nicht geschrieben“.
+- **Telemetrie-Migration v2** fügt nur Indizes hinzu; die Daten bleiben erhalten.
+  - Neue Indizes auf `request_events`: `(service, ts_ms)` und `(request_id)`.
+  - Neue Indizes auf `request_steps(step, ts_ms)`, `system_samples(metric, ts_ms)`,
+    `service_probes(service, ts_ms)` und `events(service, last_ts_ms)`.
+  - Die Abfragepläne der Kernabfragen werden per Test mit `EXPLAIN QUERY PLAN` geprüft: Index
+    oder Primärschlüssel, kein Tabellenscan.
+- **Dienststatus nur aus gespeicherten Daten:**
+  - Ollama und Stirling: letzte Probe, letzte erfolgreiche Probe, „Eingeschränkt“ bei
+    `upstream_error` in den letzten 15 min, „Veraltet“ bei alter Probe, „Nicht konfiguriert“
+    bei abgeschalteter Probe.
+  - Collector: `Monitor.health()` und das Alter des letzten Flush.
+  - Kein Browser-Request löst eine Upstream-Abfrage aus (getestet).
+- **Inklusive Schrittdauern:** `forms.inspect` enthält `stirling.ocr`. Die exklusive Dauer wird
+  nur aus Rohdaten pro Request berechnet; bei Rollups ist sie „nicht verfügbar“. Die
+  Oberfläche weist darauf hin, dass die Summe der Schritte nicht die Request-Dauer ist.
+
+### 15.3 Live-Aktualisierung
+
+- **Polling-Intervalle** kommen vom Server: Live-Aktivität alle 5 s, Übersicht und Server alle
+  15 s, übrige Bereiche alle 30 s. Konfigurierbar über `monitoring.web.poll_*_seconds`.
+- **Steuerung im Browser:**
+  - Es läuft immer nur ein Request; ein neuer bricht den vorherigen ab (`AbortController`).
+  - Bei Fehlern greift exponentielles Backoff bis 5 min.
+  - Bei verborgenem Tab oder „Pause“ wird nicht abgefragt.
+  - Bei 401 oder 403 wird sofort gestoppt (401 führt zum Login).
+- **Darstellung:**
+  - Bei Fehlern bleiben die letzten Daten sichtbar und werden als veraltet markiert
+    (abgeschwächt, Hinweis, „Veraltet“ in der Statuszeile).
+  - Diagramme werden in-place aktualisiert (`update('none')`); die Seite wird nicht neu gezeichnet.
+- **Session-Schutz:**
+  - Eine Begrenzung pro Session (Default 240 pro Minute) schützt vor außer Kontrolle geratenen Tabs.
+  - Polling verlängert die Session nie.
+  - Nur echte Bedienaktionen (Filterwechsel, „weitere laden“) senden höchstens alle 30 s den
+    CSRF-geschützten `POST /monitor/session/activity`.
+- **Animationen** sind kurz (250 ms) und entfallen bei `prefers-reduced-motion`.
+
+### 15.4 Darstellung von Datenqualität und Unsicherheit
+
+| Fall | Darstellung |
+|---|---|
+| echter Messwert 0 | „0“ |
+| nicht verfügbar / nicht konfiguriert | „—“ mit Begründung (z. B. „GPU-Metriken werden nicht erfasst“, „Noch kein Messwert“) |
+| veraltet | Status-Badge „Veraltet“; bei Verbindungsverlust abgeschwächte Werte und Hinweis |
+| unvollständig | Badge „Unvollständig“ an KPIs und im Panel „Datenqualität“ (verworfene Datensätze, Collector-Lücken, Zeitraum vor den ersten Daten) |
+| geschätzt | „≈ Schätzung“ (Perzentile aus Histogrammen); Datenquelle und Auflösung an jedem Diagramm |
+| Nenner 0 | keine Prozentzahl („—“) |
+| Build ohne Angaben | Commit und Image-Tag „nicht verfügbar“, Quellstand „nicht angegeben“; Hinweis, dass ein Commit allein kein unverändertes Image belegt |
+
+### 15.5 Sicherheit
+
+- Die M3-Architektur ist unverändert: Netzwerkprüfung, Session (Argon2id und TOTP), CSRF,
+  strikte CSP ohne `unsafe-inline` und `unsafe-eval`. Chart.js funktioniert unter dieser CSP; der
+  Browser-Test schlägt bei jedem CSP-Verstoß fehl.
+- Daten werden im Browser nur per `textContent` bzw. als Canvas-Text ausgegeben. Ein Test stellt
+  sicher, dass die Skripte kein `innerHTML`, `eval` oder `new Function` enthalten.
+- Texte für das Skript werden als escaptes Datenattribut übergeben, nicht als Inline-Skript.
+- Die Security-Ansicht zeigt nur Audit-Felder und eine 12-stellige Session-Referenz – keine
+  Tokens, Hashes, Passwörter oder Codes. Es gibt keine Benutzerverwaltung, keine
+  Entsperrung und kein Löschen.
+
+### 15.6 Ergebnisse
+
+- **API-Tests** (`tests/test_monitor_dashboard_api.py`):
+  - Zugriffsmatrix inklusive Kunden-Keys, Validierung und SQL-Injection.
+  - Leere Datenbank, Korrektheit gegen synthetische Daten (Zählungen, exakte Perzentile, keine
+    Doppelzählung, UTC-Grenzen, Lücken gegenüber Nullen).
+  - Clients, Schritte, Server, Security, Pagination, Rate-Limit, Aktivitätsroute.
+  - Keine Upstream-Aufrufe, Telemetrie- und Auth-Store-Ausfall, Lesen unter Schreib-Lock,
+    Parallelität, Abfragepläne.
+  - 120.000 Requests über 7 Tage: alle Bereiche unter 2,5 s pro Abfrage (lokal).
+- **Browser-Tests** (`tests/test_monitor_dashboard_browser.py`, Playwright mit Edge):
+  - alle Seiten bei 1440, 768 und 375 px, Deutsch und Englisch, hell und dunkel, ohne
+    horizontales Scrollen;
+  - Zeitraum- und Client-Filter, Live/Pause, verborgener Tab, Netzwerkfehler, Sessionende,
+    leere Installation, unvollständige Daten;
+  - keine JS-Fehler und keine CSP-Verstöße.
+
+### 15.7 Offene Punkte nach M4
+
+- **Tokens/s** werden nur aus Rohdaten berechnet; für Rollup-Zeiträume ist der Wert „nicht
+  verfügbar“, weil Rollups bekannte Tokens und Generierungszeiten nicht paarweise führen.
+- **Prozessmetriken** stammen nur vom Worker, der den Sampler-Lease hält (wie in M2).
+- **Exklusive Dauern** gibt es nur für die bekannte Verschachtelung `forms.inspect` ⊃
+  `stirling.ocr`.
+- **Lasttests unter Produktionsbedingungen** (mehrere Worker, große Datenbank auf dem Zielsystem,
+  synchrone Probes im Collector) gehören zu M7.

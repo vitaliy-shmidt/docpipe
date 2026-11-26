@@ -1075,8 +1075,13 @@ names, prompts, answers, keys or error message texts).
 interface at `/monitor` with its own login (separate users file, Argon2id,
 mandatory TOTP, VPN/IP allowlist by default). Customer API keys never grant
 access to it. Users are created only with the local CLI
-`python -m system.tools.monitor_user`. Configuration: `config.example.yaml`
-(`monitoring:`); design, security model and deployment requirements:
+`python -m system.tools.monitor_user`. The interface shows Overview, Live
+Activity, Projects & Clients, Performance, Server and Security (audit) dashboards
+with charts (Chart.js, served locally), data-quality and estimate markers, DE/EN
+and light/dark; its protected read-only data API is documented in
+[docs/architecture/monitoring-api.md](docs/architecture/monitoring-api.md).
+Configuration: `config.example.yaml` (`monitoring:`); design, security model and
+deployment requirements:
 [docs/architecture/monitoring-dashboard.md](docs/architecture/monitoring-dashboard.md).
 
 ## Logging

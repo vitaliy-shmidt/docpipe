@@ -205,6 +205,9 @@ monitoring:
     audit_days: 90
     max_audit_rows: 100000
     auth_db_max_bytes: 67108864     # separate security database <data_dir>/monitor-auth.db
+    poll_activity_seconds: 5        # dashboard refresh of Live Activity (2-60)
+    poll_overview_seconds: 15       # Overview/Server refresh (5-300); other pages max(30, this)
+    api_requests_per_minute: 240    # data API cap per session (30-2000), beyond: 429
     login:
       ip_max_failures: 10           # per client IP within window_minutes, then locked
       user_max_failures: 5          # per username (from any IP) within window_minutes, then locked
