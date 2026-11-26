@@ -243,6 +243,106 @@ _EN = {
     "step_forms.fill": "Form filling",
     "not_measured": "not measured",
     "gpu_not_configured": "GPU metrics are not collected (no GPU access configured).",
+    "filter_model": "Model",
+    "filter_operation": "Operation",
+    "op_analyze": "Document analysis",
+    "op_assistant": "Assistant",
+    "op_prompt_lab": "Prompt Lab",
+    "op_warmup": "Warm-up",
+    "op_other": "Other",
+    "op_extract_text": "Text extraction",
+    "op_ocr": "OCR",
+    "op_convert": "Conversion to PDF",
+    "ollama_scope": (
+        "Only AI calls made by DocPipe are counted. Other applications may use Ollama directly; "
+        "they are not part of these statistics."
+    ),
+    "stirling_scope": (
+        "Only real Stirling PDF calls are counted. DocPipe's own form analysis and filling run "
+        "inside DocPipe and are not Stirling usage."
+    ),
+    "models_installed": "Installed models",
+    "models_loaded": "Loaded models",
+    "family": "Family",
+    "size": "Size",
+    "parameters": "Parameters",
+    "quantization": "Quantization",
+    "context": "Context",
+    "vram_reported": "VRAM (reported by Ollama)",
+    "keep_alive_left": "Keep-alive remaining",
+    "expires": "Expires",
+    "measured_at": "Measured",
+    "loaded": "loaded",
+    "not_loaded": "not loaded",
+    "expired_unconfirmed": "Expiry reached per last measurement – unloading not confirmed",
+    "snapshot_stale": "Model snapshot is stale",
+    "no_models": "No model snapshot recorded yet.",
+    "active_ai": "Running AI calls",
+    "active_ai_hint": (
+        "Only Ollama calls DocPipe is executing right now. A loaded model does not mean that "
+        "anything is being processed."
+    ),
+    "no_active_ai": "No AI call running.",
+    "ai_calls_over_time": "AI calls over time",
+    "tokens_over_time": "Tokens over time",
+    "throughput_over_time": "Throughput (tokens/s)",
+    "load_time_over_time": "Model load time",
+    "errors_over_time": "Errors over time",
+    "model_usage": "Usage by model",
+    "client_usage": "Usage by client",
+    "operation_usage": "Usage by operation",
+    "warmups": "Warm-ups (separate)",
+    "generation_tps": "Generation tokens/s",
+    "prompt_tps": "Prompt tokens/s",
+    "throughput_hint": (
+        "Weighted: sum of tokens / sum of measured seconds of calls where both are known. Speed "
+        "while Ollama worked on DocPipe calls – not the server's throughput over time including "
+        "idle periods."
+    ),
+    "throughput_partial": "partially available",
+    "calls_without_pairs": "calls without token/duration pairs",
+    "docpipe_measured": "measured by DocPipe",
+    "probe_history": "Status history",
+    "probe_latency": "Probe latency",
+    "probe_failures": "Probe failures",
+    "probe_ok": "OK",
+    "probe_failed": "Failed",
+    "probe_timeout": "Timeouts",
+    "probe_connection_error": "Connection errors",
+    "probe_http_error": "HTTP errors",
+    "probe_invalid_response": "Invalid responses",
+    "gpu_host_hint": "GPU values of the DocPipe host (not collected by default).",
+    "gpu_remote_warning": (
+        "Ollama runs on another host – GPU values of the DocPipe host do not describe Ollama's GPU."
+    ),
+    "location": "Ollama location",
+    "location_local": "same host as DocPipe",
+    "location_remote": "other host",
+    "location_unknown": "unknown",
+    "pdf_over_time": "Stirling calls over time",
+    "ops_by_type": "Calls by operation",
+    "latency_by_op": "Response time by operation",
+    "ocr_durations": "OCR duration",
+    "by_route": "Calling DocPipe endpoints",
+    "recent_probes": "Recent status checks",
+    "ai_performance": "AI performance",
+    "stirling_ops": "Stirling operations",
+    "running": "running",
+    "state_unknown_ai": "state unknown (snapshot of another worker is stale)",
+    "keep_alive_hint": (
+        "Countdown from the expiry time of the last measurement. Ollama may unload the model "
+        "earlier or keep it longer."
+    ),
+    "host_gpu": "GPU of the DocPipe host",
+    "started": "Started",
+    "operation": "Operation",
+    "outcome": "Outcome",
+    "timings_reported": "Times reported by Ollama (Ø per call)",
+    "duration_measured": "Duration measured by DocPipe",
+    "real_gpu_hint": (
+        "Ollama reports how much of a loaded model resides in VRAM. That is memory allocation, not "
+        "GPU utilisation."
+    ),
     "no_sample": "No measurement yet",
 }
 
@@ -481,6 +581,107 @@ _DE = {
     "step_forms.fill": "Formularbefüllung",
     "not_measured": "nicht gemessen",
     "gpu_not_configured": "GPU-Metriken werden nicht erfasst (kein GPU-Zugriff konfiguriert).",
+    "filter_model": "Modell",
+    "filter_operation": "Aufrufart",
+    "op_analyze": "Dokumentanalyse",
+    "op_assistant": "Assistent",
+    "op_prompt_lab": "Prompt Lab",
+    "op_warmup": "Warm-up",
+    "op_other": "Sonstige",
+    "op_extract_text": "Textextraktion",
+    "op_ocr": "OCR",
+    "op_convert": "PDF-Konvertierung",
+    "ollama_scope": (
+        "Gezählt werden nur KI-Aufrufe von DocPipe. Andere Anwendungen können Ollama direkt nutzen; "
+        "sie sind nicht Teil dieser Statistik."
+    ),
+    "stirling_scope": (
+        "Gezählt werden nur echte Stirling-PDF-Aufrufe. DocPipes eigene Formularanalyse und "
+        "-befüllung laufen in DocPipe und sind keine Stirling-Nutzung."
+    ),
+    "models_installed": "Installierte Modelle",
+    "models_loaded": "Geladene Modelle",
+    "family": "Familie",
+    "size": "Größe",
+    "parameters": "Parameter",
+    "quantization": "Quantisierung",
+    "context": "Kontext",
+    "vram_reported": "VRAM (von Ollama gemeldet)",
+    "keep_alive_left": "Keep-alive verbleibend",
+    "expires": "Ablauf",
+    "measured_at": "Gemessen",
+    "loaded": "geladen",
+    "not_loaded": "nicht geladen",
+    "expired_unconfirmed": "Ablaufzeit laut letzter Messung erreicht – Entladung nicht bestätigt",
+    "snapshot_stale": "Modellstand veraltet",
+    "no_models": "Noch kein Modellstand erfasst.",
+    "active_ai": "Laufende KI-Aufrufe",
+    "active_ai_hint": (
+        "Nur Ollama-Aufrufe, die DocPipe gerade ausführt. Ein geladenes Modell bedeutet nicht, dass "
+        "gerade etwas verarbeitet wird."
+    ),
+    "no_active_ai": "Kein KI-Aufruf aktiv.",
+    "ai_calls_over_time": "KI-Aufrufe im Zeitverlauf",
+    "tokens_over_time": "Tokens im Zeitverlauf",
+    "throughput_over_time": "Durchsatz (Tokens/s)",
+    "load_time_over_time": "Modellladezeit",
+    "errors_over_time": "Fehler im Zeitverlauf",
+    "model_usage": "Nutzung nach Modell",
+    "client_usage": "Nutzung nach Client",
+    "operation_usage": "Nutzung nach Aufrufart",
+    "warmups": "Warm-ups (separat)",
+    "generation_tps": "Generierung Tokens/s",
+    "prompt_tps": "Prompt Tokens/s",
+    "throughput_hint": (
+        "Gewichtet: Summe der Tokens / Summe der gemessenen Sekunden aller Aufrufe, bei denen "
+        "beides bekannt ist. Geschwindigkeit, während Ollama an DocPipe-Aufrufen arbeitete – nicht "
+        "der zeitliche Serverdurchsatz einschließlich Leerlauf."
+    ),
+    "throughput_partial": "teilweise verfügbar",
+    "calls_without_pairs": "Aufrufe ohne Token-/Dauer-Paar",
+    "docpipe_measured": "von DocPipe gemessen",
+    "probe_history": "Statusverlauf",
+    "probe_latency": "Latenz der Statusprüfung",
+    "probe_failures": "Fehlgeschlagene Prüfungen",
+    "probe_ok": "OK",
+    "probe_failed": "Fehlgeschlagen",
+    "probe_timeout": "Timeouts",
+    "probe_connection_error": "Verbindungsfehler",
+    "probe_http_error": "HTTP-Fehler",
+    "probe_invalid_response": "Ungültige Antworten",
+    "gpu_host_hint": "GPU-Werte des DocPipe-Hosts (standardmäßig nicht erfasst).",
+    "gpu_remote_warning": (
+        "Ollama läuft auf einem anderen Host – GPU-Werte des DocPipe-Hosts beschreiben nicht die "
+        "GPU von Ollama."
+    ),
+    "location": "Ollama-Standort",
+    "location_local": "gleicher Host wie DocPipe",
+    "location_remote": "anderer Host",
+    "location_unknown": "unbekannt",
+    "pdf_over_time": "Stirling-Aufrufe im Zeitverlauf",
+    "ops_by_type": "Aufrufe nach Operation",
+    "latency_by_op": "Antwortzeit nach Operation",
+    "ocr_durations": "OCR-Dauer",
+    "by_route": "Aufrufende DocPipe-Endpunkte",
+    "recent_probes": "Letzte Statusprüfungen",
+    "ai_performance": "KI-Performance",
+    "stirling_ops": "Stirling-Operationen",
+    "running": "läuft",
+    "state_unknown_ai": "Zustand unbekannt (Snapshot eines anderen Workers veraltet)",
+    "keep_alive_hint": (
+        "Countdown ab der Ablaufzeit der letzten Messung. Ollama kann das Modell früher entladen "
+        "oder länger behalten."
+    ),
+    "host_gpu": "GPU des DocPipe-Hosts",
+    "started": "Gestartet",
+    "operation": "Aufrufart",
+    "outcome": "Ergebnis",
+    "timings_reported": "Von Ollama gemeldete Zeiten (Ø pro Aufruf)",
+    "duration_measured": "Von DocPipe gemessene Dauer",
+    "real_gpu_hint": (
+        "Ollama meldet, wie viel eines geladenen Modells im VRAM liegt. Das ist Speicherbelegung, "
+        "keine GPU-Auslastung."
+    ),
     "no_sample": "Noch kein Messwert",
 }
 
@@ -515,8 +716,8 @@ SECTIONS = (
     ("nav_performance", "graph-up", None, "/monitor/performance"),
     ("nav_server", "hdd-stack", None, "/monitor/server"),
     ("nav_security", "shield-lock", None, "/monitor/security"),
-    ("nav_ollama", "cpu", "M5", None),
-    ("nav_stirling", "file-earmark-pdf", "M5", None),
+    ("nav_ollama", "cpu", None, "/monitor/ollama"),
+    ("nav_stirling", "file-earmark-pdf", None, "/monitor/stirling"),
     ("nav_logs", "journal-text", "M6", None),
     ("nav_connectors", "plug", "#2", None),
 )

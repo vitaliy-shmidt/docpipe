@@ -41,11 +41,13 @@ from markupsafe import Markup
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from system.monitoring.registry import AI_OPERATIONS, STIRLING_OPERATION_BY_STEP
 from system.monitoring.web import netaccess, totp
 from system.monitoring.web.authstore import AUTH_DB_FILENAME, AuthStore
 from system.monitoring.web.dashboard import BadRequest, Dashboard, TelemetryUnavailable
 from system.monitoring.web.i18n import JS_KEYS, SECTIONS, TEXTS, choose_language
 from system.monitoring.web.passwords import MAX_PASSWORD_LENGTH, VerificationLimiter
+from system.monitoring.web.upstreams import UpstreamViews
 from system.monitoring.web.users import USERNAME, UsersFile, UsersUnavailable
 
 logger = logging.getLogger("docpipe.monitoring.web")
@@ -92,6 +94,8 @@ PAGES = {
     "/monitor/performance": "performance",
     "/monitor/server": "server",
     "/monitor/security": "security",
+    "/monitor/ollama": "ollama",
+    "/monitor/stirling": "stirling",
 }
 # Read-only data API (Phase M4): never extends the idle time.
 DATA_API = {
@@ -102,6 +106,8 @@ DATA_API = {
     "/monitor/api/v1/server": "server",
     "/monitor/api/v1/security": "security",
     "/monitor/api/v1/meta": "meta",
+    "/monitor/api/v1/ollama": "ollama",
+    "/monitor/api/v1/stirling": "stirling",
 }
 ROUTES.update({path: {"GET"} for path in (*PAGES, *DATA_API)})
 MAX_QUERY_BYTES = 1024
@@ -179,6 +185,11 @@ class MonitorWeb:
         self.static = _load_static()
         self.dashboard = Dashboard(
             settings.monitoring, monitor, self.store, settings.clients, clock=lambda: self._clock()
+        )
+        self.upstreams = UpstreamViews(
+            self.dashboard,
+            ollama_base_url=settings.ollama.base_url,
+            known_models={p.model for p in settings.models.values()},
         )
         self._api_calls: dict[str, deque] = {}
         self._api_lock = threading.Lock()
@@ -487,6 +498,8 @@ class MonitorWeb:
             "clients": max(30, self.web.poll_overview_seconds),
             "performance": max(30, self.web.poll_overview_seconds),
             "security": max(30, self.web.poll_overview_seconds),
+            "ollama": self.web.poll_overview_seconds,
+            "stirling": self.web.poll_overview_seconds,
         }
 
     def _page(self, ctx: Ctx, page: str) -> Response:
@@ -505,6 +518,9 @@ class MonitorWeb:
             poll_seconds=self._poll_seconds()[page],
             js_texts=json.dumps({k: t[k] for k in JS_KEYS if k in t}, ensure_ascii=True),
             clients=sorted(self.dashboard.known_clients),
+            models=sorted(self.upstreams.known_models),
+            ai_operations=sorted(AI_OPERATIONS),
+            stirling_operations=sorted(STIRLING_OPERATION_BY_STEP.values()),
             services=sorted(s for s in self.dashboard_services()),
             idle_expires_ms=min(
                 row.last_activity_ms + self.web.session_idle_minutes * 60_000, row.absolute_expiry_ms
@@ -543,6 +559,8 @@ class MonitorWeb:
         try:
             if name == "meta":
                 data = self.dashboard.meta(poll=self._poll_seconds(), web_settings=self.web)
+            elif name in ("ollama", "stirling"):
+                data = getattr(self.upstreams, name)(ctx.query)
             elif name == "security":
                 data = self.dashboard.security(
                     ctx.query,

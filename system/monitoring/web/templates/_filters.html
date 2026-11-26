@@ -36,12 +36,30 @@
       </select>
     </div>
     {% endif %}
+    {% if "model" in show %}
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label small mb-1" for="f-model">{{ t.filter_model }}</label>
+      <select class="form-select form-select-sm" id="f-model" name="model">
+        <option value="">{{ t.all }}</option>
+        {% for m in models %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    {% if "operation" in show %}
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label small mb-1" for="f-operation">{{ t.filter_operation }}</label>
+      <select class="form-select form-select-sm" id="f-operation" name="operation">
+        <option value="">{{ t.all }}</option>
+        {% for o in operations %}<option value="{{ o }}">{{ t["op_" ~ o] }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
     {% if "status" in show %}
     <div class="col-6 col-md-3 col-xl-2">
       <label class="form-label small mb-1" for="f-status">{{ t.filter_status }}</label>
       <select class="form-select form-select-sm" id="f-status" name="status">
         <option value="">{{ t.all }}</option>
-        {% for s in ("success", "failed", "client_error", "server_error") %}
+        {% for s in (statuses or ("success", "failed", "client_error", "server_error")) %}
         <option value="{{ s }}">{{ t["status_" ~ s] }}</option>{% endfor %}
       </select>
     </div>

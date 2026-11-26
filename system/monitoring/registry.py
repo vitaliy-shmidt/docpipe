@@ -65,6 +65,29 @@ STEPS = frozenset(
     }
 )
 
+# AI calls by DocPipe operation (route of the request that made the call).
+AI_OPERATION_BY_ROUTE: dict[str, str] = {
+    "/api/v1/documents/analyze": "analyze",
+    "/api/v1/documents/warmup": "warmup",
+    "/api/v1/lab/analyze": "prompt_lab",
+    "/api/v1/assistant/query": "assistant",
+    "/api/v1/assistant/warmup": "warmup",
+}
+AI_OPERATIONS = frozenset({*AI_OPERATION_BY_ROUTE.values(), "other"})
+# Stirling operations: only steps that really call Stirling.
+STIRLING_OPERATION_BY_STEP: dict[str, str] = {
+    "stirling.extract_text": "extract_text",
+    "stirling.ocr": "ocr",
+    "stirling.convert": "convert",
+}
+
+
+def ai_operation(route: str, step: str) -> str:
+    if step == "ai.warmup":
+        return "warmup"
+    return AI_OPERATION_BY_ROUTE.get(route, "other")
+
+
 ERROR_CODES = frozenset(STATUS_BY_CODE)
 UNKNOWN_ERROR = "unknown"
 # Step outcome: "ok", a DocPipe error code, or "error" (any other exception).

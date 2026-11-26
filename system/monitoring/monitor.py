@@ -215,8 +215,16 @@ class Monitor:
             service=service,
             max_steps=self.settings.max_steps_per_request,
         )
+        metrics.state = state if isinstance(state, dict) else None
         self.recorder.begin(request_id, route, method, service, now)
         return metrics
+
+    def authenticated_client(self, metrics: RequestMetrics) -> str | None:
+        """The client id system/auth.py stored for this request, if it is a
+        configured client - never a value from the request body or headers."""
+        state = metrics.state
+        raw = state.get("client_id") if isinstance(state, dict) else None
+        return raw if isinstance(raw, str) and raw in self.known_clients else None
 
     def end(self, metrics: RequestMetrics, scope) -> None:
         duration_ms = round((time.perf_counter() - metrics.mono_start) * 1000, 3)
@@ -349,7 +357,7 @@ class Monitor:
                 return 0
             try:
                 persisted = self.store.write_batch(
-                    self.instance_id, batch, now, self.recorder.active_snapshot()
+                    self.instance_id, batch, now, self.recorder.active_snapshot(), self.recorder.ai_snapshot()
                 )
             except Exception as exc:
                 self.status["last_flush_error"] = type(exc).__name__

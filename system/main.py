@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
 
         monitor = Monitor(settings)
         stirling_client = MonitoredStirlingClient(stirling_client)
-        ollama_client = MonitoredOllamaClient(ollama_client, monitor.known_models)
+        ollama_client = MonitoredOllamaClient(ollama_client, monitor.known_models, monitor)
         monitor.start()
     web = None
     if monitor is not None and settings.monitoring.web.enabled:

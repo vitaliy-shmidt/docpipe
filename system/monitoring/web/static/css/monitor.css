@@ -129,6 +129,12 @@
 .dpm-table td { font-variant-numeric: tabular-nums; }
 .dpm-id { max-width: 9rem; }
 .dpm-row-stale td { color: var(--dpm-muted); }
+/* Phase M5: upstream pages */
+.dpm-tile-value.dpm-tone-bad { color: var(--dpm-bad); }
+.dpm-th-group { font-size: .75rem; font-weight: 600; color: var(--dpm-muted); border-bottom-width: 1px; }
+.dpm-reported { background: var(--bs-tertiary-bg); }
+.dpm-keepalive { font-variant-numeric: tabular-nums; }
+.dpm-kpi-head .badge { white-space: normal; text-align: start; max-width: 100%; }
 
 .dpm-empty-icon { font-size: 2rem; color: var(--bs-secondary-color); }
 

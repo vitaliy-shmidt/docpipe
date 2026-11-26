@@ -106,6 +106,8 @@ class Recorder:
         self._events: OrderedDict[tuple, EventRecord] = OrderedDict()
         self._losses: dict[int, QualityCounters] = {}
         self._active: dict[str, tuple[str, str, str, int]] = {}
+        self._ai_active: dict[int, tuple] = {}
+        self._ai_seq = 0
         # Lifetime totals of this process (exposed through health()).
         self.totals = {
             "requests_recorded": 0,
@@ -147,6 +149,36 @@ class Recorder:
     def abandon(self, request_id: str) -> None:
         with self._lock:
             self._active.pop(request_id, None)
+
+    # --- running AI steps (Phase M5) ----------------------------------------------
+
+    def ai_begin(
+        self,
+        request_id: str,
+        client_id: str | None,
+        model: str | None,
+        operation: str,
+        step: str,
+        started_ms: int,
+    ) -> int | None:
+        """Register an Ollama call that has started; returns a token for
+        ai_end. Bounded like the active-request list."""
+        with self._lock:
+            if len(self._ai_active) >= self._max_requests:
+                return None
+            self._ai_seq += 1
+            self._ai_active[self._ai_seq] = (request_id, client_id, model, operation, step, started_ms)
+            return self._ai_seq
+
+    def ai_end(self, token: int | None) -> None:
+        if token is None:
+            return
+        with self._lock:
+            self._ai_active.pop(token, None)
+
+    def ai_snapshot(self, limit: int = 200) -> list[tuple]:
+        with self._lock:
+            return list(self._ai_active.values())[:limit]
 
     def active_snapshot(self, limit: int = 500) -> list[tuple[str, str, str, str, int]]:
         with self._lock:

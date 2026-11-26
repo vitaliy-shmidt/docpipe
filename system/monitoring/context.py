@@ -55,6 +55,7 @@ class RequestMetrics:
         "max_steps",
         "unhandled",
         "hook_failures",
+        "state",
     )
 
     def __init__(
@@ -84,6 +85,9 @@ class RequestMetrics:
         self.max_steps = max_steps
         self.unhandled = False
         self.hook_failures = 0
+        # The request's state dict (scope["state"]): system/auth.py stores the
+        # authenticated client_id there; read only, never written by monitoring.
+        self.state: dict | None = None
 
     def add_step(self, record: StepRecord) -> None:
         if len(self.steps) >= self.max_steps:

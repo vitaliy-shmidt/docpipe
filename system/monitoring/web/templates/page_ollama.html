@@ -1,0 +1,102 @@
+{% extends "layout.html" %}
+{% block heading %}{{ t.nav_ollama }}{% endblock %}
+{% block filters %}{% with show=("model", "client", "operation", "status"), operations=ai_operations, statuses=("success", "failed"), ranges=("1h", "24h", "7d", "30d", "custom"), default_range="24h" %}{% include "_filters.html" %}{% endwith %}{% endblock %}
+{% block content %}
+<div class="alert alert-secondary small d-flex gap-2" role="note">{{ icon("info-circle") }}<span>{{ t.ollama_scope }}</span></div>
+
+<section class="row g-3 mb-3" id="ol-state" aria-label="{{ t.health }}"></section>
+
+<section class="card mb-3" aria-labelledby="ol-active-title">
+  <div class="card-header dpm-card-header">{{ icon("hourglass-split") }}<h2 class="h6 mb-0" id="ol-active-title">{{ t.active_ai }}</h2>
+    <span class="badge text-bg-primary ms-2" id="ol-active-count">–</span></div>
+  <div class="card-body pb-0"><p class="small text-body-secondary mb-2">{{ t.active_ai_hint }}</p></div>
+  <div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.started }}</th><th scope="col">{{ t.age }}</th><th scope="col">{{ t.client }}</th>
+      <th scope="col">{{ t.model }}</th><th scope="col">{{ t.operation }}</th><th scope="col">{{ t.filter_status }}</th>
+      <th scope="col">{{ t.request_id }}</th></tr></thead>
+    <tbody id="ol-active"></tbody></table></div>
+</section>
+
+<div class="row g-3 mb-3">
+  <div class="col-12">
+    <section class="card h-100" aria-labelledby="ol-loaded-title">
+      <div class="card-header dpm-card-header">{{ icon("cpu") }}<h2 class="h6 mb-0" id="ol-loaded-title">{{ t.models_loaded }}</h2>
+        <span class="ms-auto dpm-meta" id="ol-models-meta"></span></div>
+      <div class="card-body pb-0"><p class="small text-body-secondary mb-2">{{ t.keep_alive_hint }} {{ t.real_gpu_hint }}</p></div>
+      <div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+        <thead><tr><th scope="col">{{ t.model }}</th><th scope="col" class="text-end">{{ t.size }}</th>
+          <th scope="col" class="text-end">{{ t.vram_reported }}</th><th scope="col" class="text-end">{{ t.context }}</th>
+          <th scope="col">{{ t.expires }}</th><th scope="col">{{ t.keep_alive_left }}</th></tr></thead>
+        <tbody id="ol-loaded"></tbody></table></div>
+    </section>
+  </div>
+  <div class="col-12">
+    <section class="card h-100" aria-labelledby="ol-installed-title">
+      <div class="card-header dpm-card-header">{{ icon("hdd-stack") }}<h2 class="h6 mb-0" id="ol-installed-title">{{ t.models_installed }}</h2>
+        <span class="badge text-bg-light border ms-2" id="ol-installed-count">–</span></div>
+      <div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+        <thead><tr><th scope="col">{{ t.model }}</th><th scope="col">{{ t.family }}</th><th scope="col" class="text-end">{{ t.size }}</th>
+          <th scope="col">{{ t.quantization }}</th><th scope="col">{{ t.parameters }}</th><th scope="col" class="text-end">{{ t.context }}</th>
+          <th scope="col">{{ t.loaded }}</th><th scope="col">{{ t.measured_at }}</th></tr></thead>
+        <tbody id="ol-installed"></tbody></table></div>
+    </section>
+  </div>
+</div>
+
+<h2 class="h5 mt-4 mb-3">{{ t.ai_performance }} <span class="dpm-meta fw-normal fs-6" data-meta="range"></span></h2>
+<div class="dpm-empty card card-body text-center d-none mb-3" id="ol-empty">
+  <p class="mb-1 fw-semibold">{{ t.no_data }}</p><p class="text-body-secondary small mb-0">{{ t.no_data_hint }}</p>
+</div>
+<section class="row g-3 mb-2" id="ol-kpis" aria-label="{{ t.ai_calls }}"></section>
+<p class="small text-body-secondary mb-3" id="ol-throughput-hint">{{ t.throughput_hint }}</p>
+<section class="row g-3 mb-3" id="ol-warmups" aria-label="{{ t.warmups }}"></section>
+
+<div class="row g-3 mb-3">
+  {% for id, ic, title in (("ol-calls", "graph-up", t.ai_calls_over_time), ("ol-latency", "clock", t.latency_over_time),
+      ("ol-tokens", "activity", t.tokens_over_time), ("ol-tps", "speedometer2", t.throughput_over_time),
+      ("ol-load", "hourglass-split", t.load_time_over_time), ("ol-errors", "exclamation-triangle", t.errors_over_time),
+      ("ol-models", "cpu", t.model_usage), ("ol-ops", "list", t.operation_usage), ("ol-clients", "people", t.client_usage)) %}
+  <div class="col-12 col-xl-6 col-xxl-4">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon(ic) }}<h2 class="h6 mb-0">{{ title }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="{{ id }}" role="img" aria-label="{{ title }}"></canvas></div>
+        <p class="small text-body-secondary mb-0 mt-2 d-none" id="{{ id }}-note"></p></div></section>
+  </div>
+  {% endfor %}
+</div>
+
+<section class="card mb-3" aria-labelledby="ol-models-table-title">
+  <div class="card-header dpm-card-header">{{ icon("journal-text") }}<h2 class="h6 mb-0" id="ol-models-table-title">{{ t.model_usage }}</h2></div>
+  <div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead>
+      <tr><th scope="col" rowspan="2">{{ t.model }}</th><th scope="colgroup" colspan="6" class="text-center dpm-th-group">{{ t.duration_measured }}</th>
+        <th scope="colgroup" colspan="5" class="text-center dpm-th-group">{{ t.ollama_reported }}</th></tr>
+      <tr><th scope="col" class="text-end">{{ t.count }}</th><th scope="col" class="text-end">{{ t.failure_rate }}</th>
+        <th scope="col" class="text-end">{{ t.avg }}</th><th scope="col" class="text-end">{{ t.median }}</th>
+        <th scope="col" class="text-end">{{ t.p95 }}</th><th scope="col" class="text-end">{{ t.p99 }}</th>
+        <th scope="col" class="text-end">{{ t.load_time }}</th><th scope="col" class="text-end">{{ t.prompt_eval }}</th>
+        <th scope="col" class="text-end">{{ t.generation }}</th><th scope="col" class="text-end">{{ t.generation_tps }}</th>
+        <th scope="col" class="text-end">{{ t.prompt_tps }}</th></tr>
+    </thead>
+    <tbody id="ol-model-table"></tbody></table></div>
+</section>
+
+<div class="row g-3 mb-3">
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("activity") }}<h2 class="h6 mb-0">{{ t.probe_history }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="ol-probes" role="img" aria-label="{{ t.probe_history }}"></canvas></div>
+        <div class="d-flex flex-wrap gap-1 mt-2" id="ol-probe-failures"></div></div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("cpu") }}<h2 class="h6 mb-0">{{ t.gpu }}</h2></div>
+      <div class="card-body"><div class="alert alert-warning small py-2 d-none" role="note" id="ol-gpu-remote">{{ t.gpu_remote_warning }}</div>
+        <div class="row g-2" id="ol-gpu"></div></div></section>
+  </div>
+</div>
+
+<section class="card mb-3"><div class="card-header dpm-card-header">{{ icon("clock") }}<h2 class="h6 mb-0">{{ t.recent_probes }}</h2></div>
+  <div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.time }}</th><th scope="col">{{ t.filter_status }}</th><th scope="col" class="text-end">{{ t.probe_latency }}</th>
+      <th scope="col">{{ t.version }}</th></tr></thead>
+    <tbody id="ol-recent"></tbody></table></div></section>
+<section class="card"><div class="card-body" id="ol-quality"></div></section>
+{% endblock %}

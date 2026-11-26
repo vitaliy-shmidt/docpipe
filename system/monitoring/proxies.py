@@ -80,9 +80,34 @@ def _sum(timing: dict, suffix: str) -> float | None:
 
 
 class MonitoredOllamaClient:
-    def __init__(self, inner, known_models: frozenset[str]) -> None:
+    def __init__(self, inner, known_models: frozenset[str], monitor=None) -> None:
         self._inner = inner
         self._known_models = known_models
+        self._monitor = monitor  # for the running-AI-step list (Phase M5)
+
+    def _begin(self, metrics, step: str, model: object) -> int | None:
+        """Mark a real Ollama call as running. Never raises."""
+        if self._monitor is None:
+            return None
+        try:
+            return self._monitor.recorder.ai_begin(
+                metrics.request_id,
+                self._monitor.authenticated_client(metrics),
+                self._model(model),
+                registry.ai_operation(metrics.route, step),
+                step,
+                self._monitor._clock(),
+            )
+        except Exception:
+            metrics.hook_failures += 1
+            return None
+
+    def _end(self, token) -> None:
+        try:
+            if self._monitor is not None:
+                self._monitor.recorder.ai_end(token)
+        except Exception:
+            pass
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -100,12 +125,14 @@ class MonitoredOllamaClient:
         observed = timing if timing is not None else {}
         started = time.perf_counter()
         error: BaseException | None = None
+        token = self._begin(metrics, "ai.generate", kwargs.get("model"))
         try:
             return self._inner.generate_structured(prompt, schema, timing=observed, **kwargs)
         except BaseException as exc:
             error = exc
             raise
         finally:
+            self._end(token)
             try:
                 tokens = call_token_counts(observed, succeeded=error is None)
                 total = observed.get("ollama_duration_ms")
@@ -135,12 +162,14 @@ class MonitoredOllamaClient:
         observed = timing if timing is not None else {}
         started = time.perf_counter()
         error: BaseException | None = None
+        token = self._begin(metrics, "ai.warmup", kwargs.get("model"))
         try:
             return self._inner.warm_up(timing=observed, **kwargs)
         except BaseException as exc:
             error = exc
             raise
         finally:
+            self._end(token)
             try:
 
                 def num(key):
