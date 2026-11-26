@@ -107,7 +107,10 @@ the identical render with an extra watermark item - nothing else differs.
 - **Checkbox/radio**: the template's own appearance state is switched on
   (`/AS`); a radio button only if it owns the chosen export value. If a
   widget has no appearance for that state, a vector check mark (checkbox) or
-  dot (radio) is drawn instead.
+  dot (radio) is drawn instead. The export value is the exact value inspect
+  reported; names that are not valid UTF-8 arrive escaped (`au#DFer`) and
+  are set as the original PDF name byte for byte
+  ([forms-inspect.md](forms-inspect.md#export-values-of-checkboxes-and-radio-buttons-pdf-names)).
 - **Images**: PNG, proportionally scaled into the rectangle and centred,
   transparency kept; never stretched.
 - **Flattening**: all widget appearances become page content (hidden

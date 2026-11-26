@@ -29,6 +29,7 @@ import pikepdf
 from system.errors import DocPipeError
 from system.forms import detect as detect_mod
 from system.forms import layout as layout_mod
+from system.forms import names as names_mod
 from system.forms import ocr as ocr_mod
 from system.forms.geometry import PageBox, VisibleRect
 
@@ -93,8 +94,8 @@ def _text(value) -> str | None:
 
 
 def _name(value) -> str:
-    text = str(value)
-    return text[1:] if text.startswith("/") else text
+    """JSON-safe, reversible text of a PDF name (bytes that are not UTF-8 become #XX; see forms/names.py)."""
+    return names_mod.name_text(value)
 
 
 def _open(data: bytes, password: str | None) -> pikepdf.Pdf:
@@ -181,12 +182,18 @@ def _collect_fields(acroform, warnings: list[dict]) -> list[_Field]:
     return fields
 
 
-def _on_states(widget) -> list[str]:
+def _on_state_keys(widget) -> list[str]:
+    """The widget's "on" appearance states as pikepdf returns the keys (raw; see `names.name_bytes`)."""
     ap = widget.get("/AP")
     normal = ap.get("/N") if isinstance(ap, pikepdf.Dictionary) else None
     if not isinstance(normal, pikepdf.Dictionary):
         return []
-    return [_name(k) for k in normal.keys() if _name(k) != "Off"]
+    return [k for k in normal.keys() if names_mod.name_bytes(k) != b"Off"]
+
+
+def on_states(widget) -> list[str]:
+    """The widget's "on" states as contract values (`options[].value`, `export_value`); shared with fill."""
+    return [_name(k) for k in _on_state_keys(widget)]
 
 
 def _choice_options(field_obj) -> list[dict]:
@@ -233,11 +240,12 @@ def _button_options(f: _Field) -> list[dict]:
     labels = [_text(o) for o in f.obj.get("/Opt", [])]
     options, seen = [], set()
     for widget in f.widgets:
-        for state in _on_states(widget):
+        for key in _on_state_keys(widget):
+            state = _name(key)
             if state in seen:
                 continue
             seen.add(state)
-            label = state
+            label = names_mod.name_label(key)
             if labels and state.isdigit() and int(state) < len(labels) and labels[int(state)]:
                 label = labels[int(state)]
             options.append({"value": state, "label": label})
@@ -340,7 +348,7 @@ def native_widgets(
             **attrs,
         }
         if attrs["type"] in ("checkbox", "radio"):
-            states = _on_states(w.obj)
+            states = on_states(w.obj)
             item["export_value"] = states[0] if states else None
         result.append(NativeWidget(item, w.obj, f.obj, tuple(f.widgets)))
     return result
@@ -542,7 +550,7 @@ def inspect_pdf(
                 "text_blocks": found.blocks() if has_text else [],
             })
 
-        return {
+        result = {
             "schema_version": SCHEMA_VERSION,
             "sha256": sha256,
             "page_count": page_count,
@@ -554,5 +562,13 @@ def inspect_pdf(
             "security": security,
             "warnings": warnings,
         }
+        # Last line of defence: the JSON response must never contain a lone surrogate (it cannot be encoded
+        # and used to end in HTTP 500). Names are already reversible text; any other text is repaired here.
+        replaced = [0]
+        result = names_mod.json_safe(result, replaced)
+        if replaced[0]:
+            result["warnings"].append(_warning("text_unencodable_replaced", "Text that cannot be represented "
+                                               "as Unicode was replaced by U+FFFD.", count=replaced[0]))
+        return result
     finally:
         pdf.close()

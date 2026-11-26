@@ -524,7 +524,9 @@ and warnings. Structure and layout run in-process with pikepdf and
 pdfminer.six; pages without a text layer are OCR'd through the existing
 Stirling OCR call (only those pages, at most `forms.max_ocr_pages`; OCR
 output is mapped onto the template only when its geometry matches, else a
-warning). An OCR failure is a warning, not an error. `Cache-Control:
+warning). An OCR failure is a warning, not an error. Checkbox/radio export
+values whose PDF names are not valid UTF-8 are reported reversibly escaped
+(`#XX`, e.g. `au#DFer`) and accepted back by `forms/fill`. `Cache-Control:
 no-store`. Full contract: [docs/forms-inspect.md](docs/forms-inspect.md);
 OpenAPI 3.1: [docs/openapi/forms.openapi.json](docs/openapi/forms.openapi.json).
 
