@@ -61,6 +61,16 @@ def _no_hscroll(page) -> bool:
     return page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
 
 
+def _overflowing(page) -> list:
+    """Elements reaching past the viewport outside scrollable table containers (diagnostics)."""
+    return page.evaluate(
+        "Array.from(document.querySelectorAll('body *')).filter(e => !e.closest('.table-responsive') && "
+        "e.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 8).map(e => e.tagName + '.' + "
+        "String(e.className).slice(0, 50) + ' [' + (e.textContent || '').trim().slice(0, 40) + '] right=' + "
+        "Math.round(e.getBoundingClientRect().right))"
+    )
+
+
 def test_pages_render_in_every_layout_language_and_theme(start_server):
     base, entry = start_server()
     problems: list[str] = []
@@ -85,10 +95,10 @@ def test_pages_render_in_every_layout_language_and_theme(start_server):
                 _ready(page)
                 assert page.evaluate("document.documentElement.getAttribute('data-bs-theme')") == scheme
                 assert page.locator("canvas").count() >= 8
-                assert _no_hscroll(page), (name, size)
+                _shot(page, f"m5-{name}-{size}-{scheme}-{locale[:2]}")
+                assert _no_hscroll(page), (name, size, _overflowing(page))
                 # the navigation entry is enabled and marked as the current page
                 assert page.locator(f"a[href='/monitor/{name}'][aria-current=page]").count() >= 1
-                _shot(page, f"m5-{name}-{size}-{scheme}-{locale[:2]}")
             context.close()
         browser.close()
     assert problems == [], problems
@@ -261,8 +271,8 @@ def test_phone_layouts(start_server):
             for name in ("ollama", "stirling"):
                 page.goto(f"{base}/monitor/{name}")
                 _ready(page)
-                assert _no_hscroll(page), name
                 _shot(page, f"m5-{name}-phone-{scheme}-de")
+                assert _no_hscroll(page), (name, _overflowing(page))
             context.close()
         browser.close()
     assert problems == [], problems
