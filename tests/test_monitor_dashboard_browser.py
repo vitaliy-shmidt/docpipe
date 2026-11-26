@@ -3,6 +3,10 @@
 A real Uvicorn server on 127.0.0.1 serves the app with synthetic data
 (tests/monitoring_seed.py), loopback allowlist and local development mode
 without TLS. Set DOCPIPE_SCREENSHOT_DIR to keep screenshots.
+
+DOCPIPE_REQUIRE_BROWSER=1 (the CI browser job) turns a missing Playwright
+package or browser into a failure instead of a skip, so the tests cannot pass
+there without having run.
 """
 
 from __future__ import annotations
@@ -17,7 +21,11 @@ from pathlib import Path
 
 import pytest
 
-playwright_sync = pytest.importorskip("playwright.sync_api")
+REQUIRE_BROWSER = os.environ.get("DOCPIPE_REQUIRE_BROWSER") == "1"
+if REQUIRE_BROWSER:
+    import playwright.sync_api as playwright_sync
+else:
+    playwright_sync = pytest.importorskip("playwright.sync_api")
 
 from system import main as main_module  # noqa: E402
 from system.monitoring.settings import ProbeSettings  # noqa: E402
@@ -73,6 +81,7 @@ def _start(monkeypatch, tmp_path, *, seeded: bool, gap=None, **seed_kwargs):
             gap=gap,
             dropped_minute=35,
             clients=("enabled-client", "ai-client", "assistant-client"),
+            **seed_kwargs,
         )
         store.close()
         auth = AuthStore(settings.monitoring.data_dir / AUTH_DB_FILENAME, 64 * 1024 * 1024)
@@ -81,7 +90,6 @@ def _start(monkeypatch, tmp_path, *, seeded: bool, gap=None, **seed_kwargs):
         auth.close()
     monkeypatch.setattr(main_module, "load_settings", lambda: settings)
     port = _free_port()
-            **seed_kwargs,
     srv = uvicorn.Server(
         uvicorn.Config(main_module.app, host="127.0.0.1", port=port, proxy_headers=False, log_level="warning")
     )
@@ -120,6 +128,8 @@ def _browser(p):
             )
         except Exception:
             continue
+    if REQUIRE_BROWSER:
+        pytest.fail("no Chromium-based browser available (DOCPIPE_REQUIRE_BROWSER=1)")
     pytest.skip("no Chromium-based browser available")
 
 
