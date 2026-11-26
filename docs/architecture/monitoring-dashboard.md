@@ -1246,8 +1246,145 @@ Es gibt keine Administration, keine Steuerung und keine Änderung von Konfigurat
 
 - **Tokens/s** werden nur aus Rohdaten berechnet; für Rollup-Zeiträume ist der Wert „nicht
   verfügbar“, weil Rollups bekannte Tokens und Generierungszeiten nicht paarweise führen.
+  In M5 durch Schema v3 behoben, siehe 16.3.
 - **Prozessmetriken** stammen nur vom Worker, der den Sampler-Lease hält (wie in M2).
 - **Exklusive Dauern** gibt es nur für die bekannte Verschachtelung `forms.inspect` ⊃
   `stirling.ocr`.
 - **Lasttests unter Produktionsbedingungen** (mehrere Worker, große Datenbank auf dem Zielsystem,
   synchrone Probes im Collector) gehören zu M7.
+
+## 16. Umsetzung Phase M5 – Ollama- und Stirling-PDF-Monitoring
+
+Zwei weitere Bereiche: `/monitor/ollama` und `/monitor/stirling`. Ihre Daten-API
+(`/monitor/api/v1/ollama`, `/stirling`) ist in [monitoring-api.md](monitoring-api.md)
+beschrieben. Beide Bereiche bauen auf der M4-Abfrageschicht auf (Read-only-Verbindung,
+Zeitbudget, Quellenwahl, Abdeckung) und nutzen dasselbe Polling. Neue Module:
+
+- `system/monitoring/web/upstreams.py`,
+- Seitenvorlagen `page_ollama.html` und `page_stirling.html`,
+- Renderer in `dashboard.js`.
+
+### 16.1 Was gezeigt wird – und was nicht
+
+| Begriff | Quelle | Bedeutung |
+|---|---|---|
+| installiert | `/api/tags` (Statusprüfung) | Modell liegt auf dem Ollama-Server |
+| geladen | `/api/ps` (Statusprüfung) | Modell ist im Speicher; **keine** Aussage über Verarbeitung |
+| aktiver KI-Aufruf | DocPipe-Recorder + `live_ai_steps` | DocPipe führt gerade einen Ollama-Aufruf aus (`ai.generate`/`ai.warmup`) |
+| VRAM (von Ollama gemeldet) | `size_vram` aus `/api/ps` | Speicherbelegung des Modells, **keine** GPU-Auslastung |
+| GPU des DocPipe-Hosts | GPU-Provider (M2) | standardmäßig nicht konfiguriert, dann „nicht verfügbar“ |
+
+- **Abgeleitet wird nichts.** Weder Verarbeitung aus `/api/ps` noch GPU-Auslastung aus
+  `size_vram`.
+- **Ollama auf anderem Host:** Liegt Ollama nicht auf dem DocPipe-Host (`ollama_location:
+  remote`, aus `ollama.base_url` klassifiziert, ohne die Adresse auszugeben), weist die Seite
+  darauf hin, dass Host-GPU-Werte nicht die GPU von Ollama beschreiben.
+- **Keep-alive:** Der Countdown läuft im Browser ab `expires_at` der letzten Messung, korrigiert
+  um die Uhrdifferenz zwischen Server und Browser (`generated_ms`). Ist der Modellstand veraltet
+  (älter als drei Prüfintervalle + 30 s), gibt es keinen Countdown, sondern den Hinweis
+  „veraltet“. Ist die Ablaufzeit erreicht, steht dort „Entladung nicht bestätigt“ – nie
+  „entladen“.
+- **Gemessen vs. gemeldet:** Von DocPipe gemessene Dauern und von Ollama gemeldete Zeiten und
+  Tokens sind in Kennzahlen und Tabellen getrennt beschriftet.
+- **Warm-ups** sind eine eigene Kennzahlengruppe und gehen nicht in die Aufrufstatistik ein.
+- **Stirling:** Gezählt werden nur die Schritte `stirling.extract_text`, `stirling.ocr` und
+  `stirling.convert`. Die native Formularanalyse und -befüllung ist keine Stirling-Nutzung.
+  OCR, das aus der Formularanalyse heraus aufgerufen wird, ist Stirling-Nutzung und erscheint
+  unter „Aufrufende DocPipe-Endpunkte“.
+
+### 16.2 Laufende KI-Aufrufe
+
+`MonitoredOllamaClient` meldet jeden `generate_structured`- und `warm_up`-Aufruf beim Recorder
+an und ab: Request-ID, Client, Modell, Aufrufart (aus dem Route-Template) und Startzeit. Es
+werden weder Prompt noch Antwort noch Schlüssel erfasst.
+
+- **Client:** Er wird nur gesetzt, wenn die DocPipe-Authentifizierung ihn im Request-Zustand
+  hinterlegt hat und er konfiguriert ist.
+- **Mehrere Worker:** Jeder Worker schreibt beim Flush seinen Stand nach `live_ai_steps`. Die
+  Seite zeigt die eigenen Aufrufe direkt und die anderer Worker aus dem Snapshot. Ist ein
+  Snapshot älter als drei Flush-Intervalle + 5 s, ist der Zustand `unknown`.
+- **Kosten:** etwa 1,4 µs pro Aufruf (lokal gemessen).
+
+### 16.3 Durchsatz und Schema v3
+
+Tokens/s werden gewichtet als Summe(Tokens) / Summe(Sekunden) berechnet. Dabei zählen nur
+Aufrufe, bei denen Token-Anzahl und zugehörige Dauer (> 0) bekannt sind. Das ist die
+Geschwindigkeit während der DocPipe-Aufrufe, nicht der Serverdurchsatz einschließlich Leerlauf.
+
+Damit das auch für Rollup-Zeiträume gilt, führt die Migration v3 Paarsummen in `rollup_steps`
+(siehe API-Dokumentation). Für die Migration gilt:
+
+- **Bestehende Daten:** Sie bleiben erhalten. Bestehende Buckets werden nur nachberechnet, wenn
+  ihre Rohzeilen vollständig vorhanden sind; andernfalls ist der Wert „nicht verfügbar“ bzw.
+  „teilweise verfügbar“.
+- **Mehrere Worker:** Die Migration läuft genau einmal (`BEGIN IMMEDIATE` mit erneuter
+  Versionsprüfung).
+- **Tests:** v1 → v3, v2 → v3, unvollständige Buckets, keine Doppelzählung, Begrenzung der
+  Nachberechnung, vier parallel startende Worker
+  (`tests/test_monitoring_migration_v3.py`).
+
+### 16.4 Collector und Statusprüfungen – Befund und Korrektur
+
+Untersucht wurden langsame und unerreichbare Upstreams mit echten lokalen Sockets
+(Zeitlimit 1 s):
+
+| Upstream-Verhalten | vorher | nachher |
+|---|---|---|
+| antwortet normal | 0,02–0,06 s | unverändert |
+| Port geschlossen | ≈ 1 s je Dienst | unverändert |
+| nimmt an, antwortet nie | ≈ 1 s je Dienst | unverändert |
+| sendet tröpfchenweise (1 Byte alle 0,25 s) | ≈ 50 s je Dienst, **unbegrenzt**, solange gesendet wird | ≈ 1 s je Dienst |
+
+**Ursache:** httpx wendet das Zeitlimit je Phase und je Lesevorgang an, nicht auf den ganzen
+Request. Weil Statusprüfungen und Flushes denselben Collector-Thread teilen, hätte ein solcher
+Upstream Flushes, Heartbeats und Live-Snapshots beliebig lange verzögert. Die Folgen wären
+gewesen:
+
+- volllaufender Puffer, danach verworfene Requests,
+- Abdeckungslücken,
+- veraltete Live-Ansichten.
+
+**Korrektur (minimal):** `probes.timeout_seconds` ist jetzt eine Gesamtfrist pro Request
+(Verbindung und alle Lesevorgänge).
+
+**Ergebnisse nach der Korrektur** (`tests/test_monitoring_probe_performance.py`):
+
+- **Flush-Verzögerung:** begrenzt auf Flush-Intervall + Schleifentakt (0,5 s) +
+  Stirling-Frist + Ollama-Frist. Mit den Standardwerten sind das höchstens etwa 5 + 0,5 + 3 + 3
+  s. Den Anteil von Stirling- und Ollama-Frist misst der Test.
+- **Live-Snapshots:** Die Stale-Schwelle beträgt drei Flush-Intervalle + 5 s, also 20 s, und
+  wird damit nicht erreicht.
+- **Puffer und Verluste:** 100 API-Requests während einer hängenden Prüfung – nichts verworfen,
+  alles gespeichert.
+- **API-Wirkung:** Antwortzeiten der API unverändert, weil der Store-Lock während der
+  HTTP-Prüfung nicht gehalten wird. Ein paralleler Flush dauert unter 0,5 s.
+
+**Nicht umgesetzt (Vorschlag, braucht Freigabe):** Statusprüfungen in einen eigenen Thread
+verlegen. Dann hinge die Flush-Verzögerung gar nicht mehr von Upstreams ab. Das ist eine
+Architekturänderung des Collectors und wurde deshalb in M5 nicht vorgenommen.
+
+### 16.5 Tests
+
+- **API** (`tests/test_monitor_upstreams_api.py`):
+  - Zugriffsmatrix inklusive Kunden-Keys und abgelaufener Session;
+  - Validierung, SQL-Injection und XSS über Modellnamen;
+  - gewichteter Durchsatz gegen Rohdaten, Rollup gleich Rohdaten bei vollständigen Buckets;
+  - Warm-ups getrennt, Filter;
+  - installierte und geladene Modelle, veralteter Stand, fehlende Felder älterer
+    Ollama-Versionen;
+  - Offline-Verlauf;
+  - parallele echte KI-Aufrufe über den Proxy, laufende Aufrufe anderer Worker;
+  - keine Upstream-Aufrufe, GPU nicht verfügbar, Standortklassifizierung, Telemetrie-Ausfall.
+- **Browser** (`tests/test_monitor_upstreams_browser.py`):
+  - beide Seiten bei 1440, 768 und 375 px, Deutsch und Englisch, hell und dunkel;
+  - Filter, Live/Pause, Countdown;
+  - Offline, veralteter Stand, Netzwerkfehler, leere Installation;
+  - keine JS-Fehler und keine CSP-Verstöße.
+
+### 16.6 Offene Punkte nach M5
+
+- **Echte GPU-Werte:** Es gibt weiterhin keinen konfigurierten GPU-Provider. Liegt Ollama auf
+  einem anderen Host, wären dessen GPU-Werte ohnehin nur dort messbar.
+- **Statusprüfungen im eigenen Thread:** siehe 16.4, nur nach Freigabe.
+- **Bestehende Pre-v3-Buckets** ohne vollständige Rohdaten bleiben dauerhaft „teilweise
+  verfügbar“, bis sie durch die Retention entfallen.

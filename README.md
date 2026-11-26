@@ -1077,6 +1077,9 @@ mandatory TOTP, VPN/IP allowlist by default). Customer API keys never grant
 access to it. Users are created only with the local CLI
 `python -m system.tools.monitor_user`. The interface shows Overview, Live
 Activity, Projects & Clients, Performance, Server and Security (audit) dashboards
+plus detailed Ollama (service state, installed/loaded models, running AI calls,
+AI performance with weighted tokens/s) and Stirling PDF (per-operation statistics,
+status history) pages,
 with charts (Chart.js, served locally), data-quality and estimate markers, DE/EN
 and light/dark; its protected read-only data API is documented in
 [docs/architecture/monitoring-api.md](docs/architecture/monitoring-api.md).
