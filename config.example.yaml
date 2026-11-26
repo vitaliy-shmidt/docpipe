@@ -182,7 +182,7 @@ monitoring:
     # URLs are ollama.base_url / stirling.base_url above; nothing else.
     ollama: true
     stirling: true
-    timeout_seconds: 3
+    timeout_seconds: 3   # total deadline per probe request (connect + all reads)
   # Operator web interface (Phase M3) at /monitor - separately enabled and only
   # together with `enabled: true` above. Startup fails on an unsafe or
   # incomplete configuration; a missing/invalid users file or auth database

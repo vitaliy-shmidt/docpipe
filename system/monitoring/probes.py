@@ -12,6 +12,10 @@ The target URLs come only from the existing server config
 environment proxies are ignored, responses are size-capped and parsed
 defensively. Model names and versions are kept only if they match a strict
 pattern; everything else Ollama returns is ignored.
+
+`timeout_seconds` is a total deadline per HTTP request (connect plus every
+read), not only a per-phase socket timeout: an upstream that trickles bytes
+cannot hold the collector thread longer than that (Phase M5 finding).
 """
 
 from __future__ import annotations
@@ -101,6 +105,7 @@ class ServiceProber:
         self._stirling_url = stirling_url.rstrip("/") if probe_stirling and stirling_url else ""
         self._probe_ollama = probe_ollama
         self._probe_stirling = probe_stirling
+        self._timeout = timeout_seconds
         self._client = httpx.Client(
             follow_redirects=False, trust_env=False, timeout=timeout_seconds, transport=transport
         )
@@ -109,6 +114,7 @@ class ServiceProber:
         self._client.close()
 
     def _get_json(self, url: str) -> tuple[dict, int]:
+        deadline = time.monotonic() + self._timeout
         try:
             with self._client.stream("GET", url, headers={"Accept": "application/json"}) as response:
                 if response.status_code != 200:
@@ -118,6 +124,8 @@ class ServiceProber:
                     body += chunk
                     if len(body) > MAX_RESPONSE_BYTES:
                         raise _ProbeFailure("invalid_response", response.status_code)
+                    if time.monotonic() > deadline:
+                        raise _ProbeFailure("timeout")
         except httpx.TimeoutException as exc:
             raise _ProbeFailure("timeout") from exc
         except httpx.HTTPError as exc:
