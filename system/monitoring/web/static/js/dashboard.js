@@ -108,6 +108,7 @@
     var stale = lastError || (lastOk && Date.now() - lastOk > 2 * pollMs + 2000);
     freshness.textContent = lastOk ? t("last_updated") + ": " + fmtTime(lastOk) + (stale ? " · " + t("stale") : "") :
       t("loading");
+    freshness.title = freshness.textContent;  // full text when the top bar truncates it on phones
     freshness.classList.toggle("text-warning-emphasis", !!stale);
     app.classList.toggle("dpm-is-stale", !!stale);
   }
@@ -393,7 +394,7 @@
     if (!container) { return; }
     clear(container);
     if (!c) { container.appendChild(el("p", "mb-0 text-body-secondary", t("not_available"))); return; }
-    var head = el("div", "d-flex align-items-center gap-2 mb-2");
+    var head = el("div", "d-flex flex-wrap align-items-center gap-2 mb-2");
     head.appendChild(el("span", "fw-semibold", t("data_quality")));
     head.appendChild(badge(c.complete ? t("complete") : t("incomplete"), c.complete ? "text-bg-success" : "text-bg-warning"));
     if (range && range.approximate) { head.appendChild(approxBadge(true)); }

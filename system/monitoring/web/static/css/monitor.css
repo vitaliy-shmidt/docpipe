@@ -152,3 +152,8 @@
   .dpm-live-dot { animation: none; }
   .card, .dpm-tile { transition: none; }
 }
+/* Phones and wide fonts: the top bar never forces horizontal scrolling (freshness truncates,
+   full text in its title), KPI headers and labels may break anywhere as a last resort. */
+.dpm-topbar .dpm-freshness { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dpm-kpi .card-body { min-width: 0; }
+.dpm-kpi-label, .dpm-kpi-head .badge { overflow-wrap: anywhere; }
