@@ -5,10 +5,12 @@ Status (26.11.2026, Branch `feature/monitoring-dashboard`, Basis `origin/main` =
 | Phase | Stand |
 |---|---|
 | M1 Bestandsanalyse und Konzept | **freigegeben** (26.11.2026), Entscheidungen in §11 |
-| M2 Monitoring Foundation | **implementiert und lokal getestet** (§13), nicht deployt, nicht in `main` |
-| M3–M7 | nicht begonnen – jeweils eigene Freigabe |
+| M2 Monitoring Foundation | **abgenommen** (26.11.2026), §13 |
+| M3 Secure Monitoring Access | **implementiert und lokal getestet** (§14), nicht deployt, nicht in `main` |
+| M4–M7 | nicht begonnen – jeweils eigene Freigabe |
 
-M2 enthält bewusst **keine** Browseroberfläche und **keine** Monitoring-Endpunkte.
+M3 enthält Login, MFA, Sessions und eine geschützte Dashboard-Shell, aber
+**keine** Statistik- oder Performance-Dashboards (M4).
 Issue: [#3](https://github.com/vitaliy-shmidt/docpipe/issues/3).
 Bezüge: [#2](https://github.com/vitaliy-shmidt/docpipe/issues/2) (AI Connectors),
 [#4](https://github.com/vitaliy-shmidt/docpipe/issues/4) (Document Evidence & Source Mapping).
@@ -349,11 +351,11 @@ nachgerüstet werden, falls Polling nicht reicht.
 - Cookie `__Host-dp_mon`: `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, ohne `Domain`.
 - Idle-Timeout 15 min, absolut 8 h (konfigurierbar); Rotation der Session-ID beim
   Login; Logout invalidiert serverseitig.
-- **Polling verlängert keine unbeaufsichtigte Session:** Automatische Abfragen
-  setzen einen Header `X-Monitor-Poll: 1` und aktualisieren die Idle-Zeit **nicht**.
-  Nur echte Benutzerinteraktionen tun das, etwa Navigation, Filterwechsel oder ein
-  explizites „Aktualisieren“. Ein offener, unbeobachteter Tab läuft also nach dem
-  Idle-Timeout (Default 15 min) ab. Das absolute Limit (8 h) gilt immer.
+- **Polling verlängert keine unbeaufsichtigte Session:** Die Regel ist serverseitig
+  und hängt nicht von Client-Angaben ab. Nur Seitenaufrufe (HTML-Navigation) zählen als
+  Aktivität. Kein Aufruf unter `/monitor/api/*` verlängert die Idle-Zeit, unabhängig von
+  Headern. Ein offener, unbeobachteter Tab läuft also nach dem Idle-Timeout (Default
+  15 min) ab. Das absolute Limit (8 h) gilt immer (umgesetzt in M3, §14.5).
 - CSRF: Einzige zustandsändernde Routen sind `POST /monitor/login` und
   `POST /monitor/logout` → Synchronizer-Token + Prüfung von `Origin`/`Sec-Fetch-Site`.
   Alle API-Routen sind `GET` und seiteneffektfrei; andere Methoden → 405.
@@ -765,8 +767,8 @@ Integration in bestehenden Code (vollständig):
   Routen bestimmt. Nicht registrierte Pfade werden als `<unmatched>` gespeichert.
 - **Flush-Intervall maximal 30 s**, damit jede Minute, in der der Collector lebt,
   mindestens einen Heartbeat hat (Grundlage der Lückenerkennung, §13.4).
-- Auth-Tabellen (`monitor_sessions`, `monitor_audit`, …) entstehen erst in M3 als
-  Migration v2.
+- Auth-Tabellen liegen seit M3 in einer **separaten** Datenbank (`monitor-auth.db`, §14.8)
+  statt als Migration v2 der Telemetrie. Das Telemetrie-Schema bleibt v1.
 
 ### 13.3 Datenbankschema (Version 1)
 
@@ -901,3 +903,228 @@ gemessen werden. Ein automatisierter Test sichert großzügige Grenzen ab:
   Volume-Rechte) ist **nicht verifiziert** **[A]**.
 - Weitere Härtungspunkte außerhalb des Monitorings:
   [docs/security/hardening-backlog.md](../security/hardening-backlog.md).
+
+---
+
+## 14. Umsetzung Phase M3 – Secure Monitoring Access
+
+Hier steht der tatsächlich implementierte Stand. Statistik- und
+Performance-Dashboards gehören nicht dazu, sie folgen mit M4.
+
+### 14.1 Aktivierung
+
+| `monitoring.enabled` | `monitoring.web.enabled` | Ergebnis |
+|---|---|---|
+| `false` (Default) | – | keine Datenbank, Dateien, Threads, Upstream-Abfragen; `/monitor*` = normales 404 |
+| `true` | `false` (Default) | Datenerfassung (M2), keine Monitoring-Route, keine Auth-Datenbank |
+| `true` | `true` | Datenerfassung und Weboberfläche |
+| `false` | `true` | **Startfehler** (ConfigError) |
+
+Strukturell unsichere Konfigurationen verhindern den Start (ConfigError):
+
+- `allowlist` mit leerer Liste oder mit `0.0.0.0/0` bzw. `::/0`,
+- `require_https: false` außerhalb von reinem Loopback,
+- `public_mfa` ohne HTTPS oder mit Allowlist,
+- ein Trusted Proxy `0/0`,
+- unbekannte Schlüssel und Werte außerhalb der Grenzen.
+
+Laufzeitprobleme **sperren nur die Oberfläche** mit 503 und einem Audit-Eintrag
+`security_config_error`; die DocPipe-API bleibt unberührt. Dazu zählen:
+
+- Benutzerdatei fehlt, ist ungültig, hat zu weite Rechte oder einen Benutzer ohne TOTP,
+- die Auth-Datenbank lässt sich nicht öffnen,
+- Uvicorn schreibt Proxy-Header selbst um.
+
+Lässt sich die Oberfläche gar nicht erst aufbauen, bleibt sie abwesend (404),
+ist aber nie offen.
+
+### 14.2 Routen
+
+Die Oberfläche ist eine eigene kleine ASGI-Anwendung. `MonitoringMiddleware`
+leitet `/monitor` und `/monitor/*` nur bei aktivierter Oberfläche dorthin weiter.
+Diese Requests erreichen nie den FastAPI-Router der Kunden-API, zählen nicht als
+API-Telemetrie und erscheinen nicht im OpenAPI-Schema.
+
+| Route | Methode | Zugang | Zweck |
+|---|---|---|---|
+| `/monitor` | GET | Session | Dashboard-Shell (Seitenaufruf = Aktivität) |
+| `/monitor/login` | GET/POST | Netzwerk | Schritt 1: Benutzername + Passwort |
+| `/monitor/login/mfa` | GET/POST | temporärer MFA-Zustand | Schritt 2: TOTP-Code |
+| `/monitor/logout` | POST | Session + CSRF | serverseitige Invalidierung |
+| `/monitor/api/v1/session` | GET | Session | Benutzer, Idle-/Absolut-Ablauf (verlängert nichts) |
+| `/monitor/api/v1/status` | GET | Session | Collector-/Store-Zustand (echte Werte aus `Monitor.health()`) |
+| `/monitor/static/*` | GET | Netzwerk | nur gelistete lokale `.css`/`.js`-Dateien |
+
+Die separate MFA-Route ist nur mit einem gültigen temporären Zustand erreichbar.
+Dieser Zustand:
+
+- entsteht erst nach korrektem Passwort,
+- liegt als Cookie `__Host-dp_mon_mfa` vor, in der Datenbank nur als Hash,
+- ist 5 min gültig und erlaubt höchstens 5 Versuche,
+- existiert pro Benutzer nur einmal und wird nach Erfolg oder Ablauf gelöscht.
+
+Eine Session gibt es erst nach beiden Faktoren.
+
+Jede Anfrage durchläuft diese Prüfungen in fester Reihenfolge, jede schließt im Fehlerfall:
+
+1. Netzwerkzugang
+2. statische Datei
+3. Sperrzustand
+4. Benutzerdatei
+5. Session
+
+Ohne Session gibt es nur `303 → /monitor/login` (Seiten) oder
+`401 {"ok":false,"code":"unauthorized"}` (API), keine technischen Daten.
+Kunden-API-Keys werden auf diesen Routen nie ausgewertet.
+
+### 14.3 Benutzer und Einrichtung
+
+- **Benutzerdatei:** separat (`monitoring.web.users_file`, YAML, `version: 1`).
+  - Benutzername, Argon2id-Hash (m = 64 MiB, t = 3, p = 1), TOTP-Secret (Base32, ≥ 128 bit), `enabled`.
+  - Unter POSIX gilt: reguläre Datei, Eigentümer = Prozessbenutzer, keine Gruppen- oder Fremdrechte (höchstens 0600).
+  - Die Datei wird bei Änderung neu geladen. Jede Änderung eines Benutzers (Passwort, MFA, Status) beendet dessen Sessions (Fingerprint).
+- **Windows-Entwicklungsbetrieb:** POSIX-Rechte sind nicht prüfbar. Die Prüfung entfällt dort und ist ausgewiesen (`permissions_checked = false`). Produktion ist Linux.
+- **CLI** `python -m system.tools.monitor_user`, Befehle `add`, `reset-password`, `reset-mfa`, `disable`, `enable`, `remove`, `revoke-sessions`, `list`:
+  - Passwörter werden nur per `getpass` abgefragt, nie als Argument (es gibt keine Option dafür).
+  - Das TOTP-Secret wird erzeugt und einmalig im Terminal angezeigt (Secret und `otpauth://`-URI). Gespeichert wird erst nach Eingabe eines gültigen Codes aus der App.
+  - Die Datei wird atomar geschrieben, mit Rechten 0600.
+  - Es gibt keine Standardpasswörter und keine Registrierung; die Oberfläche hat keine Benutzerverwaltung.
+- **Wiederherstellung:** Der Betreiber führt `reset-password` bzw. `reset-mfa` auf dem Server aus. Alte Sessions enden dabei automatisch; `revoke-sessions` beendet Sessions sofort.
+
+### 14.4 TOTP
+
+- Verfahren: RFC 6238 mit HMAC-SHA1, 6 Stellen, 30 s – kompatibel mit üblichen Authenticator-Apps. Getestet mit den RFC-Testvektoren.
+- Toleranz ±1 Zeitschritt (konfigurierbar 0..1). Codes werden in konstanter Zeit verglichen.
+- **Replay-Schutz atomar:** Ein Code gilt nur, wenn sein Zeitschritt-Zähler größer ist als jeder bisher akzeptierte Zähler des Benutzers.
+  - Umsetzung als UPSERT mit Bedingung in einer `BEGIN IMMEDIATE`-Transaktion, zusammen mit Session-Anlage und Audit.
+  - Damit funktioniert der Schutz auch über mehrere Worker hinweg.
+  - Gespeichert wird nur der Zähler, nie ein Code.
+- MFA-Fehlversuche zählen in dieselben IP- und Benutzer-Limits wie Passwortfehler.
+
+### 14.5 Sessions
+
+- **Session-ID:** 256 bit aus `secrets`. In der Datenbank steht nur der SHA-256-Hash.
+- **Rotation:** Bei jedem Login entsteht eine neue ID. Eine mitgesendete alte Session wird gelöscht; eine untergeschobene ID wird nie übernommen.
+- **Cookie** `__Host-dp_mon`: `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, ohne `Domain`, ohne `Max-Age`.
+- **Timeouts:** Idle 15 min (5–60), absolut 8 h (1–12), höchstens 3 Sessions pro Benutzer (1–10; die älteste endet).
+- **Aktivität wird serverseitig festgelegt, nicht durch Client-Angaben:**
+  - Nur Seitenaufrufe (`GET /monitor`) zählen als Aktivität.
+  - Kein Aufruf unter `/monitor/api/*` verlängert die Idle-Zeit, unabhängig von Headern. Das Dashboard-Polling setzt zwar `X-Monitor-Poll: 1`, der Server wertet ihn aber nicht aus.
+  - Ein unbeaufsichtigter Tab läuft damit nach dem Idle-Timeout ab.
+- **Logout:** serverseitige Löschung, Cookie wird gelöscht, Audit-Eintrag.
+- **Abgelaufene Sessions** werden beim nächsten Zugriff oder beim periodischen Aufräumen gelöscht und mit Grund `idle`/`absolute` auditiert.
+
+### 14.6 Login-Schutz und Rate-Limits
+
+- **Pro IP:** 10 Fehler in 15 min, dann 15 min Sperre.
+- **Pro Benutzername:** 5 Fehler in 15 min, dann 15 min Sperre, unabhängig von der IP.
+  - Das gilt auch für unbekannte Namen, sodass die Sperre nichts über die Existenz eines Benutzers verrät.
+  - Gespeichert werden nur HMAC-Hashes (Schlüssel zufällig in der Auth-Datenbank), nie eingetippte Namen.
+- Die Zähler liegen in SQLite und werden atomar fortgeschrieben, damit sie über mehrere Worker gelten.
+- **Einheitliche Antworten:** Falsches Passwort, unbekannter Benutzer, deaktivierter Benutzer, Sperre und fehlende Kapazität ergeben alle dieselbe Seite mit HTTP 401. Unbekannte Benutzer werden gegen einen Dummy-Hash geprüft.
+- **Begrenzung von Argon2id** pro Prozess: höchstens 2 gleichzeitig und 30 pro Minute. Darüber hinaus läuft Argon2 gar nicht, und die Antwort ist die einheitliche Fehlermeldung. Gesperrte Subjekte lösen ebenfalls kein Argon2 aus. Argon2 und SQLite laufen im Threadpool, nie im Event-Loop der API.
+- **Request-Grenzen:**
+  - POST-Body höchstens 4 KiB, sonst 413.
+  - Nur `application/x-www-form-urlencoded` mit höchstens 10 Feldern.
+  - Falsche Methoden ergeben 405.
+
+### 14.7 Browser-Sicherheit
+
+- **CSRF:** Login und MFA nutzen ein Double-Submit-Token im `__Host-dp_mon_csrf`-Cookie. Logout nutzt ein an die Session gebundenes HMAC-Token.
+  - Zusätzlich muss `Origin` exakt passen: `public_origin` oder Schema + Host.
+  - Fehlt `Origin`, wird nur `Sec-Fetch-Site: same-origin` akzeptiert; `Origin: null` wird abgelehnt.
+  - Login-CSRF von fremden Seiten wird damit abgewiesen.
+- **Header auf jeder Antwort**, auch bei 403/404/503 und für statische Dateien:
+  - CSP: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`
+  - `X-Content-Type-Options: nosniff`
+  - `Referrer-Policy: same-origin` – bewusst nicht `no-referrer`, weil Browser dann bei Formular-POSTs `Origin: null` senden und die Origin-Prüfung den Login blockieren würde (vom Browser-Test gefunden).
+  - `X-Frame-Options: DENY`
+  - restriktive `Permissions-Policy`
+  - COOP und CORP `same-origin`
+  - `Cache-Control: no-store` (statische Dateien: `private, max-age=3600`)
+- **XSS:** Jinja2 mit Autoescape. Keine Inline-Skripte, keine Inline-Styles, keine Event-Handler-Attribute. Das JavaScript schreibt Daten nur per `textContent`.
+- **Lokale Ressourcen:** Bootstrap 5.3.3 und eine Teilmenge von Bootstrap Icons 1.11.3 (serverseitig als Inline-SVG) werden lokal ausgeliefert. Kein CDN, kein Tracking. Versionen, Prüfsummen und Lizenzen stehen in `system/monitoring/web/static/vendor/README.md`.
+- **Keine sensiblen Daten in URLs:** Fehlermeldungen werden direkt gerendert, nicht über Query-Parameter weitergereicht.
+
+### 14.8 Sicherheitsdatenbank (`<data_dir>/monitor-auth.db`)
+
+Die Sicherheitsdaten liegen bewusst **getrennt** von der Telemetrie-Datenbank:
+
+- Telemetrie ist fail-open, Authentifizierung fail-closed.
+- Retention und Pressure-Pruning der Telemetrie können Sessions, Rate-Limits und Audit nie berühren.
+- Die Auth-Datenbank hat eine eigene Größengrenze (`auth_db_max_bytes`); ist sie voll, schlagen Logins geschlossen fehl.
+- Eine Migration der M2-Telemetrie war nicht nötig, das Telemetrie-Schema bleibt v1, und vorhandene Daten bleiben unverändert.
+
+Weitere Eigenschaften:
+
+- Schema v1 mit `PRAGMA user_version` und Migrationsliste.
+- Tabellen: `meta`, `sessions`, `pending_mfa`, `rate_limits`, `totp_last`, `audit`.
+- WAL, `synchronous=FULL`, Rechte 0600.
+- Jeder Zugriff hält ein Prozess-Lock (eine Verbindung pro Prozess); zwischen Workern serialisiert `BEGIN IMMEDIATE`.
+- Jeder Datenbankfehler führt zu einer Ablehnung (503) und nie zu Zugriff.
+- Gespeichert werden **nicht**: Passwörter, TOTP-Codes, Session-IDs im Klartext, Kunden-API-Keys, eingetippte Benutzernamen.
+
+### 14.9 Audit
+
+- **Ereignisse:**
+  - Anmeldung: `login_success`, `login_failed`, `mfa_failed`, `totp_replay`, `lockout`, `login_throttled`
+  - Session: `logout`, `session_expired`, `session_revoked`
+  - Zugriff und Konfiguration: `access_denied`, `csrf_failed`, `security_config_error`
+- **Felder:** Zeit, Ereignis, Benutzername (nur wenn in der Benutzerdatei vorhanden), Client-IP, Grund-Code, gekürzte Session-Referenz (12 Hex-Zeichen des Hashes), Wiederholungszähler.
+- Wiederholte gleiche Ereignisse, etwa `access_denied` von derselben IP, werden innerhalb von 60 s zusammengefasst.
+- **Aufbewahrung:** unabhängig von der Telemetrie, Default 90 Tage und höchstens 100.000 Zeilen.
+- Die Audit-Daten sind in M3 nur in der Datenbank. Eine Anzeige im Bereich „Sicherheit“ folgt in M4.
+
+### 14.10 Betrieb der Weboberfläche (Deployment-Anforderungen)
+
+Die produktive Serverkonfiguration wurde **nicht** verändert. Für eine spätere,
+eigens freizugebende Aktivierung gilt:
+
+1. **Uvicorn ohne eigene Proxy-Header-Auswertung.**
+   - Das `Dockerfile` startet jetzt mit `--no-proxy-headers`. Die Kunden-API nutzt weder Client-Adresse noch Schema; das ist geprüft, die API ist also nicht betroffen.
+   - Überschreibt das Produktions-Compose den Startbefehl, muss es das Flag ebenfalls setzen, alternativ `UVICORN_PROXY_HEADERS=false`.
+   - Erkennt DocPipe einen Uvicorn-CLI-Start ohne das Flag, bleibt die Oberfläche gesperrt (`uvicorn_proxy_headers`).
+2. **Reverse Proxy:**
+   - Er terminiert HTTPS.
+   - Er setzt `X-Forwarded-For` selbst, indem er die echte Gegenstelle **anhängt** (z. B. nginx `proxy_add_x_forwarded_for`), und `X-Forwarded-Proto https`.
+   - Er reicht den `Host`-Header unverändert durch oder es wird `public_origin` gesetzt.
+   - Seine Adresse kommt in `monitoring.web.trusted_proxies`, z. B. `127.0.0.1/32` bei Host-Networking.
+   - `/monitor` sollte zusätzlich am Proxy auf VPN bzw. Allowlist beschränkt sein (Defense in Depth).
+3. **Volumes:** Das Datenverzeichnis ist schreibbar für UID 1000 (Telemetrie- und Auth-Datenbank). Die Benutzerdatei liegt außerhalb des Repositories, gehört dem Prozessbenutzer und hat Rechte 0600.
+4. **Einrichtung:** `python -m system.tools.monitor_user --file <users_file> add <name>` im Container bzw. Image mit interaktivem Terminal ausführen.
+5. **Smoke-Test nach Aktivierung:**
+   - `/monitor` von außerhalb der Allowlist ergibt 403.
+   - Login mit beiden Faktoren funktioniert.
+   - Logout invalidiert die Session.
+   - Die HubDix- und PDF4Fill-Regression ist unverändert.
+6. **Rollback:** `monitoring.web.enabled: false` und Neustart. Die Auth-Datenbank kann gelöscht werden; sie enthält nur Sitzungs- und Sicherheitsdaten.
+
+### 14.11 Tests
+
+- **Neue Tests in M3 (unter Windows ausgeführt):** 7 POSIX-Rechte-Tests werden dort übersprungen und laufen unter Linux.
+  - Konfiguration und Aktivierung
+  - Benutzerdatei
+  - Netzwerk und Proxy (IPv4, IPv6, IPv4-mapped)
+  - TOTP mit RFC-Vektoren
+  - Anmeldung und Sessions: Replay, parallele TOTP-Anfragen, Fixation, Idle- und Absolut-Timeout, Polling ohne Verlängerung
+  - CSRF, Login-CSRF, Brute-Force und Rate-Limits über mehrere Worker, Argon2-Begrenzung
+  - Fail-closed bei Auth-Store- und Benutzerdatei-Ausfall, Telemetrie-Ausfall ohne Einfluss auf die Anmeldung
+  - alle bestehenden Kunden-API-Keys gegen alle geschützten Routen
+  - Kanarienvögel in Audit, HTML, JSON, Logs und Datenbankdateien
+  - Security-Header und CSP auf allen Antworten, keine Inline- oder externen Ressourcen
+  - CLI
+- **H1** (konstante Laufzeit beim API-Key-Vergleich) und **H2** (Access-Log ohne Rohpfade) haben eigene Testdateien.
+- **Browser-Test** `tests/test_monitor_web_browser.py`, optional; ohne Playwright und Chromium wird er übersprungen:
+  - echter Uvicorn-Server und Edge headless
+  - Desktop/Deutsch/Hell und Smartphone/Englisch/Dunkel
+  - Login, Fehlermeldung, MFA, Shell, mobile Navigation, Logout
+  - Cookie-Attribute aus Browsersicht
+  - keine CSP-Verstöße und keine Skriptfehler
+
+### 14.12 Offene Punkte nach M3
+
+- Ohne eigenes Gerät gibt es keinen Wiederherstellungscode. Die Wiederherstellung läuft bewusst nur über das Betreiber-CLI auf dem Server.
+- Die Benutzersperre pro Name kann von außen ausgelöst werden (Lockout-DoS). Im Modus `allowlist` ist das auf freigegebene Netze beschränkt; in `public_mfa` ist es ein bekanntes Restrisiko zugunsten des Brute-Force-Schutzes.
+- Sessions sind nicht an die IP gebunden (mobile Netze, VPN-Wechsel). Eine IP-Bindung wäre optional nachrüstbar.
+- Die Erkennung der Uvicorn-Proxy-Header deckt CLI-Starts ab. Andere Launcher, etwa Gunicorn mit Uvicorn-Workern, sind durch die Deploy-Anforderung abgedeckt, nicht technisch erzwungen.
+- Synchrone Probes im Collector-Thread (aus M2) bleiben ein dokumentiertes Performance-Risiko und Teil der M7-Lasttests.

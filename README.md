@@ -1059,13 +1059,32 @@ wording, or provider details - see "Multi-project design" above.
 - No retries: if Stirling or Ollama is unavailable, DocPipe answers
   immediately with the matching error code. Retrying is left to the
   calling client.
-- DocPipe is stateless — no DB, no queue, no persisted jobs, no usage
-  tracking. Request in, response out.
+- DocPipe's document processing is stateless — no queue, no persisted
+  jobs. Request in, response out. The only exception is the optional
+  operator monitoring (below), disabled by default.
+- API keys are compared in constant time (SHA-256 digests with
+  `hmac.compare_digest`, every client checked).
+
+## Operator monitoring (optional, disabled by default)
+
+`monitoring.enabled: true` collects technical request metrics, processing
+step durations, system metrics and Ollama/Stirling status into a local
+SQLite database - only allow-listed, structured values (never bodies, file
+names, prompts, answers, keys or error message texts).
+`monitoring.web.enabled: true` additionally serves a read-only operator
+interface at `/monitor` with its own login (separate users file, Argon2id,
+mandatory TOTP, VPN/IP allowlist by default). Customer API keys never grant
+access to it. Users are created only with the local CLI
+`python -m system.tools.monitor_user`. Configuration: `config.example.yaml`
+(`monitoring:`); design, security model and deployment requirements:
+[docs/architecture/monitoring-dashboard.md](docs/architecture/monitoring-dashboard.md).
 
 ## Logging
 
 Structured, one line per request: timestamp, request ID, client ID,
-endpoint, HTTP status, duration. A `X-Request-ID` response header is set
+method, route template (e.g. `/api/v1/lab/prompts/{mode}`; `<unmatched>`
+for unknown paths - never the raw path or query string), HTTP status,
+duration. A `X-Request-ID` response header is set
 on every response for correlating client-side and server-side logs.
 `/documents/extract-text` additionally logs one line per successful
 request with input size, initial (pre-OCR) and final text *lengths*

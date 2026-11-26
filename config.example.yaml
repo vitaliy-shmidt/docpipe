@@ -183,6 +183,37 @@ monitoring:
     ollama: true
     stirling: true
     timeout_seconds: 3
+  # Operator web interface (Phase M3) at /monitor - separately enabled and only
+  # together with `enabled: true` above. Startup fails on an unsafe or
+  # incomplete configuration; a missing/invalid users file or auth database
+  # locks the interface (503) without affecting DocPipe's API.
+  # Requires Uvicorn to run with --no-proxy-headers (as in the Dockerfile).
+  # See docs/architecture/monitoring-dashboard.md "Betrieb der Weboberfläche".
+  web:
+    enabled: false
+    access_mode: allowlist          # allowlist (VPN / IP allowlist) | public_mfa (explicit)
+    allowed_networks: []            # required and non-empty in allowlist mode, e.g. ["10.8.0.0/24", "fd00:8::/64"]
+    trusted_proxies: []             # reverse proxies whose X-Forwarded-For/-Proto are used, e.g. ["127.0.0.1/32"]
+    require_https: true             # false only for loopback-only development
+    # public_origin: https://monitor.example.org   # exact Origin for CSRF checks (optional)
+    users_file: monitoring-users.yaml   # created with: python -m system.tools.monitor_user add <name>; 0600
+    session_idle_minutes: 15        # 5-60; dashboard polling never extends it
+    session_absolute_hours: 8       # 1-12
+    mfa_pending_seconds: 300        # password accepted, waiting for the TOTP code
+    max_sessions_per_user: 3
+    totp_window_steps: 1            # accepted clock drift in 30 s steps (0 or 1)
+    audit_days: 90
+    max_audit_rows: 100000
+    auth_db_max_bytes: 67108864     # separate security database <data_dir>/monitor-auth.db
+    login:
+      ip_max_failures: 10           # per client IP within window_minutes, then locked
+      user_max_failures: 5          # per username (from any IP) within window_minutes, then locked
+      window_minutes: 15
+      lockout_minutes: 15
+      mfa_max_attempts: 5           # per password step
+      argon2_max_concurrency: 2     # Argon2id checks at the same time (per process)
+      argon2_per_minute: 30         # Argon2id checks per minute (per process); beyond: uniform failure
+      max_request_bytes: 4096
 # Build information (optional, environment variables of the container - never
 # guessed): DOCPIPE_BUILD_COMMIT, DOCPIPE_IMAGE_TAG, DOCPIPE_BUILD_LOCAL_CHANGES
 # (true/false; unset = unknown), DOCPIPE_BUILD_LOCAL_PATCHES (e.g.
