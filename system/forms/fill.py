@@ -38,7 +38,8 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 
 from system.errors import DocPipeError
-from system.forms import fonts
+from system.forms import fonts, names
+from system.forms import inspect as inspect_mod
 from system.forms import render as rnd
 from system.forms.geometry import PageBox, VisibleRect
 from system.forms.inspect import NativeWidget, _open, native_widgets
@@ -162,11 +163,8 @@ def _hidden(widget: pikepdf.Dictionary) -> bool:
 
 
 def _states(widget: pikepdf.Dictionary) -> list[str]:
-    ap = widget.get("/AP")
-    normal = ap.get("/N") if isinstance(ap, pikepdf.Dictionary) else None
-    if not isinstance(normal, pikepdf.Dictionary):
-        return []
-    return [str(k)[1:] for k in normal.keys() if str(k) != "/Off"]
+    """The widget's "on" states exactly as inspect reports them (reversible text, see forms/names.py)."""
+    return inspect_mod.on_states(widget)
 
 
 def _strip_variable_text(widget: pikepdf.Dictionary) -> None:
@@ -480,7 +478,11 @@ def _plan_native(
         states = _states(widget)
         # A radio button is on only if it owns the chosen state; a checkbox widget is on for any target.
         on = target is not None and (target in states if item["type"] == "radio" else True)
-        widget.AS = pikepdf.Name("/" + target) if on and target in states else pikepdf.Name.Off
+        # target is one of the widget's own states here, so it maps back to exactly that PDF name.
+        if on and target in states:
+            widget.AS = names.make_name(names.name_bytes_from_text(target))
+        else:
+            widget.AS = pikepdf.Name.Off
         rect = _rect_of(sibling)
         native_rects[sibling.item["page"] - 1].append((rect, entry.id))
         if on and target not in states and not _hidden(widget):  # no appearance for the state: vector mark

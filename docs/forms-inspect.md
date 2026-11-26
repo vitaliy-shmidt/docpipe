@@ -171,6 +171,33 @@ Current field values are not returned. Push buttons, fields without a name
 or of an unknown type, and widgets that are on no page are ignored with a
 warning carrying a `count`.
 
+### Export values of checkboxes and radio buttons (PDF names)
+
+The export values in `options[].value` and `export_value` are the widget's
+appearance-state names (`/AP /N` keys). A PDF name is a byte sequence, not
+text, and real forms also use single-byte encodings, e.g. `/au#DFer`
+(0xDF = "ß" in Windows-1252). DocPipe reports every name as JSON-safe text
+that maps back to exactly one PDF name (`system/forms/names.py`):
+
+| PDF name (bytes) | Reported value | Rule |
+|---|---|---|
+| `Ja`, `Grüße` (UTF-8), `A#B`, `Sp ace` | unchanged | valid UTF-8 without `#` + two hex digits - as before |
+| `au` 0xDF `er` | `au#DFer` | each byte that is not valid UTF-8 becomes `#XX` |
+| `Wei#DF` (literal `#`) | `Wei#23DF` | in the escaped form every `#` is written `#23` |
+
+- An escaped value always contains `#` + two upper-case hex digits, an
+  unchanged one never does, so different names never get the same value
+  (`Wei` 0xDF, UTF-8 `Weiß` and literal `Wei#DF` are three options).
+- `label` is for display only: the `/Opt` label if present, otherwise the
+  name decoded as UTF-8 or, for escaped names, as Windows-1252 (`außer`);
+  labels may coincide, values never do.
+- Clients must send `forms/fill` exactly the reported value; it is mapped
+  back to the original bytes. Values that inspect cannot produce (e.g.
+  `au#dfer` in lower case) are rejected as `invalid_value` / `option`.
+- Any other text that cannot be encoded as UTF-8 (lone surrogates) is
+  replaced by U+FFFD with the warning `text_unencodable_replaced` (`count`),
+  so the response is always valid JSON. Names are never replaced.
+
 ### Field proposals (static pages)
 
 Deterministic layout heuristics (`system/forms/detect.py`), no AI. They are
@@ -256,7 +283,8 @@ the warning `form_filling_not_permitted`.
 `field_tree_invalid`, `xfa_present`, `signed_document`, `certified_document`,
 `form_filling_not_permitted`, `text_extraction_not_permitted`,
 `text_extraction_failed`, `no_text_layer`, `ocr_failed`, `ocr_page_limit`,
-`ocr_no_text`, `ocr_geometry_mismatch`, `fields_detected`, `detection_limit`.
+`ocr_no_text`, `ocr_geometry_mismatch`, `fields_detected`, `detection_limit`,
+`text_unencodable_replaced`.
 Messages never contain names, values or text.
 
 ## Errors
@@ -307,6 +335,9 @@ signed, XFA) against its schema.
 - `system/forms/detect.py`: field proposals.
 - `system/forms/inspect.py`: structure (pikepdf) and orchestration; the
   upload itself is never modified.
+- `system/forms/names.py`: reversible, JSON-safe text for PDF names (shared
+  by inspect and fill); tests in `tests/test_forms_pdf_names.py` (byte 0xDF,
+  UTF-8 umlauts, literal `#`, look-alike names, inspect route, fill round trip).
 - `system/routes/forms.py`: route, temp-file handling (shared with
   extract-text), metadata-only log line `forms_inspect` (counts of native
   fields, proposals and OCR pages; never names, text or the password).
