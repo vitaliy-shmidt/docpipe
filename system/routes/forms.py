@@ -27,6 +27,8 @@ from system.errors import DocPipeError
 from system.forms import fill as fill_mod
 from system.forms.inspect import inspect_pdf
 from system.forms.schemas import FILL_RESPONSES, INSPECT_RESPONSES, FillManifest
+from system.monitoring.context import note_pages
+from system.monitoring.context import step as monitoring_step
 from system.routes.documents import _assert_is_pdf, _spool_upload_to_temp_file
 
 router = APIRouter()
@@ -85,16 +87,21 @@ def forms_inspect(
         finally:
             os.remove(temp_path)
         input_bytes = len(file_bytes)
-        data = inspect_pdf(
-            file_bytes,
-            password or None,
-            max_pages=settings.forms.max_pages,
-            max_fields=settings.forms.max_fields,
-            ocr=runner,
-            ocr_skipped="off" if ocr_mode == "off" else "disabled",
-            max_ocr_pages=settings.forms.max_ocr_pages,
-            detect=detect_mode == "auto",
-        )
+        # Monitoring (no-op when disabled): duration of the in-process
+        # analysis (includes any Stirling OCR call, which is also recorded
+        # as its own step) and the page count inspect already determined.
+        with monitoring_step("forms.inspect"):
+            data = inspect_pdf(
+                file_bytes,
+                password or None,
+                max_pages=settings.forms.max_pages,
+                max_fields=settings.forms.max_fields,
+                ocr=runner,
+                ocr_skipped="off" if ocr_mode == "off" else "disabled",
+                max_ocr_pages=settings.forms.max_ocr_pages,
+                detect=detect_mode == "auto",
+            )
+        note_pages(data.get("page_count"))
     except DocPipeError as exc:
         status = exc.code
         raise
@@ -180,14 +187,17 @@ def forms_fill(
                 raise DocPipeError("invalid_image", "Each image part needs a unique, simple file name.",
                                    details={"reason": "image_ref"})
             parts[ref] = _read_upload(upload, fill_mod.MAX_IMAGE_BYTES)
-        result = fill_mod.fill_pdf(
-            file_bytes,
-            parsed,
-            fill_mod.load_images(parts),
-            password or None,
-            max_pages=settings.forms.max_pages,
-            max_fields=settings.forms.max_fields,
-        )
+        images_loaded = fill_mod.load_images(parts)
+        with monitoring_step("forms.fill"):
+            result = fill_mod.fill_pdf(
+                file_bytes,
+                parsed,
+                images_loaded,
+                password or None,
+                max_pages=settings.forms.max_pages,
+                max_fields=settings.forms.max_fields,
+            )
+        note_pages(result.pages)
     except DocPipeError as exc:
         status = exc.code
         raise

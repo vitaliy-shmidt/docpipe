@@ -146,6 +146,49 @@ forms:
   # Phase 2.2: forms/fill uses max_pages/max_fields too (manifest entries); its other
   # limits are fixed (manifest 1 MiB, 10 PNG images of 5 MiB / 25 megapixels).
 
+# Operator monitoring (Phase M2 foundation, docs/architecture/monitoring-dashboard.md).
+# Disabled by default: without `enabled: true` there is no database, no file,
+# no thread, no upstream probe and no route. M2 only collects data - there is
+# no dashboard and no monitoring endpoint yet (M3/M4). Every value below is
+# optional; shown are the defaults.
+monitoring:
+  enabled: false
+  # SQLite database directory - mount a persistent volume writable by the
+  # container user (UID 1000) here; created with 0700, the database with 0600.
+  data_dir: monitoring-data
+  flush_interval_seconds: 5          # 1-30; batch write of buffered request records
+  system_sample_interval_seconds: 15 # /proc + cgroup v2 readers, no privileges
+  probe_interval_seconds: 30         # GET-only status probes (see `probes`)
+  maintenance_interval_seconds: 60   # retention, WAL checkpoint, storage pressure
+  buffer_max_requests: 10000         # in-memory bound; overflow is dropped AND counted
+  buffer_max_events: 1000
+  max_steps_per_request: 64
+  retention:
+    raw_days: 7                # per-request rows and processing steps
+    minute_rollup_days: 14
+    hour_rollup_days: 400
+    system_raw_hours: 48
+    system_minute_days: 30
+    probe_days: 30
+    event_days: 30
+    data_quality_days: 30
+    max_event_rows: 100000
+  storage:
+    max_bytes: 536870912           # 512 MiB for database + -wal + -shm together
+    min_free_disk_bytes: 268435456 # writes pause below 256 MiB free on the volume
+  probes:
+    # Ollama: GET /api/version, /api/tags, /api/ps - never a generation or
+    # model load. Stirling: GET /api/v1/info/status - never a PDF operation.
+    # URLs are ollama.base_url / stirling.base_url above; nothing else.
+    ollama: true
+    stirling: true
+    timeout_seconds: 3
+# Build information (optional, environment variables of the container - never
+# guessed): DOCPIPE_BUILD_COMMIT, DOCPIPE_IMAGE_TAG, DOCPIPE_BUILD_LOCAL_CHANGES
+# (true/false; unset = unknown), DOCPIPE_BUILD_LOCAL_PATCHES (e.g.
+# "ollama-think-false"). An image with local patches is reported as
+# "modified", never as the unmodified commit.
+
 clients:
   demo-client:
     enabled: true

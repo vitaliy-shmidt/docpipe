@@ -47,6 +47,7 @@ from system.ai.text_optimization.settings import (
     default_text_optimization,
 )
 from system.assistant.modes import ASSISTANT_MODES
+from system.monitoring.settings import MonitoringConfigError, MonitoringSettings, parse_monitoring
 
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_MAX_FILE_SIZE_MB = 25
@@ -238,6 +239,8 @@ class Settings:
     text_optimization: dict[str, TextOptimizationSettings] = field(default_factory=default_text_optimization)
     clients: dict[str, ClientConfig] = field(default_factory=dict)
     forms: FormsSettings = FormsSettings()
+    # Operator monitoring (docs/architecture/monitoring-dashboard.md) - disabled by default.
+    monitoring: MonitoringSettings = MonitoringSettings()
 
     def find_client_by_api_key(self, api_key: str) -> ClientConfig | None:
         for client in self.clients.values():
@@ -515,6 +518,13 @@ def _parse_forms(raw_forms: object) -> FormsSettings:
     return FormsSettings(**values)
 
 
+def _parse_monitoring(raw: object) -> MonitoringSettings:
+    try:
+        return parse_monitoring(raw)
+    except MonitoringConfigError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def load_settings() -> Settings:
     config_path = os.environ.get("DOCPIPE_CONFIG", DEFAULT_CONFIG_PATH)
     raw = _load_yaml(config_path)
@@ -597,6 +607,7 @@ def load_settings() -> Settings:
         clients=clients,
         text_optimization=_parse_text_optimization(raw.get("text_optimization")),
         forms=_parse_forms(raw.get("forms")),
+        monitoring=_parse_monitoring(raw.get("monitoring")),
     )
 
     # Unconditional (see _validate_prompt_defaults docstring) - unlike
