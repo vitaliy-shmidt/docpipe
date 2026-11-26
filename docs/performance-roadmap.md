@@ -1,5 +1,8 @@
 # Performance findings and optimization roadmap
 
+> **Aktive GitHub Issues:** [#4 Document Evidence & Source Mapping](https://github.com/vitaliy-shmidt/docpipe/issues/4) · [#2 External AI Providers](https://github.com/vitaliy-shmidt/docpipe/issues/2). Die nachfolgende Roadmap hält weiterhin die historischen Messungen und Entscheidungen fest.
+
+
 Status: **2026-11-04**
 
 This document records the current real-server findings for DocPipe on the
