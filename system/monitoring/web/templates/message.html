@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block body_class %}dpm-auth{% endblock %}
+{% block page %}message{% endblock %}
+{% block title %}{{ heading }} – {{ t.title }}{% endblock %}
+{% block body %}
+<main class="dpm-auth-main container">
+  <div class="dpm-auth-card card shadow-sm">
+    <div class="card-body p-4 p-sm-5 text-center">
+      <span class="dpm-brand-mark mb-3">{{ icon("exclamation-triangle") }}</span>
+      <h1 class="h4">{{ heading }}</h1>
+      <p class="text-body-secondary mb-0">{{ text }}</p>
+    </div>
+  </div>
+</main>
+{% endblock %}

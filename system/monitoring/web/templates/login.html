@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block body_class %}dpm-auth{% endblock %}
+{% block page %}login{% endblock %}
+{% block body %}
+<main class="dpm-auth-main container">
+  <div class="dpm-auth-card card shadow-sm">
+    <div class="card-body p-4 p-sm-5">
+      <div class="d-flex justify-content-between align-items-start mb-4 gap-3 flex-wrap">
+        <div class="d-flex align-items-center gap-2">
+          <span class="dpm-brand-mark">{{ icon("shield-lock") }}</span>
+          <div>
+            <h1 class="h4 mb-0">{{ t.title }}</h1>
+            <p class="text-body-secondary small mb-0">{{ t.subtitle }}</p>
+          </div>
+        </div>
+        {% include "_prefs.html" %}
+      </div>
+
+      {% if step == "mfa" %}
+      <h2 class="h5 mb-2">{{ icon("key") }} {{ t.mfa_title }}</h2>
+      <p class="text-body-secondary">{{ t.mfa_hint }}</p>
+      {% endif %}
+
+      {% if error %}
+      <div class="alert alert-danger d-flex gap-2 align-items-start" role="alert">
+        {{ icon("exclamation-triangle") }}<span>{{ error }}</span>
+      </div>
+      {% endif %}
+
+      {% if step == "mfa" %}
+      <form method="post" action="/monitor/login/mfa" autocomplete="off" novalidate>
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="mb-4">
+          <label class="form-label" for="code">{{ t.mfa_code }}</label>
+          <input class="form-control form-control-lg dpm-code" id="code" name="code" type="text"
+                 inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus>
+        </div>
+        <button class="btn btn-primary w-100 btn-lg" type="submit">{{ t.verify }}</button>
+      </form>
+      <div class="text-center mt-3"><a href="/monitor/login" class="small">{{ t.back_to_login }}</a></div>
+      {% else %}
+      <form method="post" action="/monitor/login" novalidate>
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="mb-3">
+          <label class="form-label" for="username">{{ t.username }}</label>
+          <input class="form-control" id="username" name="username" type="text" maxlength="64"
+                 autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+        </div>
+        <div class="mb-4">
+          <label class="form-label" for="password">{{ t.password }}</label>
+          <input class="form-control" id="password" name="password" type="password" maxlength="256"
+                 autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary w-100 btn-lg" type="submit">{{ icon("lock") }} {{ t.sign_in }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</main>
+{% endblock %}

@@ -24,7 +24,17 @@ class MonitoringMiddleware:
             await self.app(scope, receive, send)
             return
         app = scope.get("app")
-        monitor = getattr(getattr(app, "state", None), "monitoring", None) if app is not None else None
+        state = getattr(app, "state", None) if app is not None else None
+        path = scope.get("path") or ""
+        if path == "/monitor" or path.startswith("/monitor/"):
+            # Operator web interface (M3): its own ASGI app, only present
+            # while monitoring.web.enabled is true. Otherwise these paths
+            # fall through to the ordinary 404. Never counted as API traffic.
+            web = getattr(state, "monitoring_web", None)
+            if web is not None:
+                await web(scope, receive, send)
+                return
+        monitor = getattr(state, "monitoring", None)
         if monitor is None:
             await self.app(scope, receive, send)
             return

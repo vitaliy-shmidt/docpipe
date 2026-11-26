@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="{{ lang }}" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}{{ t.title }}{% endblock %}</title>
+  <link rel="stylesheet" href="/monitor/static/vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="/monitor/static/css/monitor.css">
+  <script src="/monitor/static/vendor/bootstrap/bootstrap.bundle.min.js" defer></script>
+  <script src="/monitor/static/js/monitor.js" defer></script>
+</head>
+<body class="{% block body_class %}{% endblock %}" data-page="{% block page %}{% endblock %}">
+{% block body %}{% endblock %}
+</body>
+</html>

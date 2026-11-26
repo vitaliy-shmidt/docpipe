@@ -53,7 +53,15 @@ async def lifespan(app: FastAPI):
         stirling_client = MonitoredStirlingClient(stirling_client)
         ollama_client = MonitoredOllamaClient(ollama_client, monitor.known_models)
         monitor.start()
+    web = None
+    if monitor is not None and settings.monitoring.web.enabled:
+        # Phase M3: separately enabled operator interface. build_web never
+        # raises; if the interface cannot be constructed it stays absent.
+        from system.monitoring.web.app import build_web
+
+        web = build_web(settings, monitor)
     app.state.monitoring = monitor
+    app.state.monitoring_web = web
     app.state.stirling_client = stirling_client
     app.state.ollama_client = ollama_client
     app.state.prompt_registry = PromptRegistry(
@@ -62,6 +70,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if web is not None:
+            app.state.monitoring_web = None
+            web.close()
         if monitor is not None:
             monitor.stop()
             app.state.monitoring = None

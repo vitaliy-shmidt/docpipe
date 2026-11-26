@@ -3,3 +3,5 @@
 *.pdf binary
 # Bundled fonts (system/forms/fonts/): binary, never normalised.
 *.ttf binary
+# Vendored browser libraries: keep byte-identical to the verified npm files (SHA-256 in the vendor README).
+system/monitoring/web/static/vendor/bootstrap/*.min.* -text
