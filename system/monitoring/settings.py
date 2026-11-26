@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from system.monitoring.web_settings import WebConfigError, WebSettings, parse_web
+
 DEFAULT_DATA_DIR = Path("monitoring-data")
 DB_FILENAME = "monitor.db"
 
@@ -65,6 +67,8 @@ class MonitoringSettings:
     retention: RetentionSettings = field(default_factory=RetentionSettings)
     storage: StorageSettings = field(default_factory=StorageSettings)
     probes: ProbeSettings = field(default_factory=ProbeSettings)
+    # Operator web interface (Phase M3) - separately enabled, see web_settings.py.
+    web: WebSettings = field(default_factory=WebSettings)
 
     @property
     def db_path(self) -> Path:
@@ -144,7 +148,7 @@ def _numbers(raw: dict, bounds: dict[str, tuple[float, float]], name: str, allow
 
 def parse_monitoring(raw: object) -> MonitoringSettings:
     raw = _mapping(raw, "monitoring")
-    top_keys = {"enabled", "data_dir", "retention", "storage", "probes", *_TOP_BOUNDS}
+    top_keys = {"enabled", "data_dir", "retention", "storage", "probes", "web", *_TOP_BOUNDS}
     values = _numbers(
         {k: v for k, v in raw.items() if k in _TOP_BOUNDS}, _TOP_BOUNDS, "monitoring", set(_TOP_BOUNDS)
     )
@@ -197,6 +201,12 @@ def parse_monitoring(raw: object) -> MonitoringSettings:
     if retention.hour_rollup_days < retention.minute_rollup_days:
         raise MonitoringConfigError("monitoring.retention.hour_rollup_days must be >= minute_rollup_days.")
 
+    try:
+        web = parse_web(raw.get("web"), collection_enabled=enabled)
+    except WebConfigError as exc:
+        raise MonitoringConfigError(str(exc)) from exc
+
     return MonitoringSettings(
-        enabled=enabled, data_dir=data_dir, retention=retention, storage=storage, probes=probes, **values
+        enabled=enabled, data_dir=data_dir, retention=retention, storage=storage, probes=probes, web=web,
+        **values,
     )
