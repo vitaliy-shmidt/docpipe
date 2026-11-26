@@ -128,8 +128,14 @@ def test_login_mfa_shell_and_logout_in_a_real_browser(server):
             )
             page.click("button[type=submit]")
             page.wait_for_url("**/monitor")
-            page.wait_for_function("document.querySelector('[data-field=collector]').textContent !== '–'")
-            assert page.locator("[data-field=collector]").text_content() in ("running", "stopped", "dead")
+            # Overview (M4) loaded with real data; polled via CDP because the page CSP blocks
+            # in-page string evaluation (page.wait_for_function).
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and not page.evaluate(
+                "document.querySelectorAll('#ov-health .dpm-health').length === 4"
+            ):
+                page.wait_for_timeout(100)
+            assert page.locator("#ov-health .dpm-health").count() == 4
             theme = page.evaluate("document.documentElement.getAttribute('data-bs-theme')")
             assert theme == scheme
             _shot(page, f"4-shell-{suffix}")

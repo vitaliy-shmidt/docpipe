@@ -226,7 +226,8 @@ def test_pages_have_no_inline_code_no_external_resources_and_escape_output(
     assert 'lang="de"' in pages[1].text and "Anmelden" in pages[1].text
     shell = pages[2].text
     assert "Übersicht" not in shell and "Overview" in shell
-    assert shell.count("planned") >= 9  # unimplemented sections are marked, not simulated
+    # unimplemented sections (Ollama, Stirling: M5; Logs: M6; Connectors: #2) are marked and disabled
+    assert shell.count('class="nav-link disabled') == 4 and shell.count("planned") >= 4
 
 
 def test_language_choice_and_fallback():
