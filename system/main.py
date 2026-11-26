@@ -26,6 +26,7 @@ from system.config import load_settings
 from system.errors import STATUS_BY_CODE, DocPipeError
 from system.monitoring.context import note_error_code
 from system.monitoring.middleware import MonitoringMiddleware
+from system.monitoring.registry import log_safe_method, log_safe_route
 from system.routes import analyze, assistant, capabilities, documents, forms, health, lab
 from system.services.ollama import OllamaClient
 from system.services.stirling import StirlingClient
@@ -93,12 +94,17 @@ async def request_logging_middleware(request: Request, call_next):
     duration_ms = round((time.monotonic() - started_at) * 1000, 1)
 
     response.headers["X-Request-ID"] = request_id
+    # Security hardening H2: never the raw (URL-decoded, client-controlled)
+    # path - it can carry control characters (log injection) or secrets.
+    # `path=` is the template of the route that handled the request (e.g.
+    # /api/v1/lab/prompts/{mode}), `<unmatched>` for unknown paths; the
+    # query string was never logged and still is not.
     logger.info(
         "request_id=%s client_id=%s method=%s path=%s status=%s duration_ms=%s",
         request_id,
         request.state.client_id,
-        request.method,
-        request.url.path,
+        log_safe_method(request.method),
+        log_safe_route(request.scope),
         response.status_code,
         duration_ms,
     )

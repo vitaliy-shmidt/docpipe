@@ -174,3 +174,15 @@ def outcome(value: object) -> str:
     if value == OUTCOME_OK:
         return OUTCOME_OK
     return member(value, ERROR_CODES, OUTCOME_ERROR)
+
+
+def log_safe_route(scope) -> str:
+    """Route template of the request for log lines (hardening H2): the path
+    of the route that actually handled it, `<unmatched>` otherwise - never
+    the raw request path."""
+    path = getattr(scope.get("route"), "path", None) if isinstance(scope, dict) else None
+    return path if safe_route(path) else UNMATCHED_ROUTE
+
+
+def log_safe_method(method: object) -> str:
+    return member(method, METHODS, OTHER_METHOD)
