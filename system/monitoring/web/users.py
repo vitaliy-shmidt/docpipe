@@ -70,7 +70,8 @@ def check_permissions(path: Path, st: os.stat_result) -> None:
         raise UsersUnavailable("users_file_not_regular")
     if os.name != "posix":
         return
-    if stat.S_IMODE(st.st_mode) & 0o077:
+    # At most 0600: no execute bit, nothing for group or others.
+    if stat.S_IMODE(st.st_mode) & 0o177:
         raise UsersUnavailable("users_file_permissions")
     if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
         raise UsersUnavailable("users_file_owner")

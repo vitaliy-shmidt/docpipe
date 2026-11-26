@@ -120,7 +120,8 @@ def uvicorn_rewrites_proxy_headers(argv: list[str] | None = None, env=None) -> b
     deployment documentation states the requirement for them."""
     argv = sys.argv if argv is None else argv
     env = os.environ if env is None else env
-    launcher = os.path.basename(argv[0]).lower() if argv else ""
+    # Normalize Windows separators so the check works for either path style.
+    launcher = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower() if argv else ""
     started_by_uvicorn = (
         launcher.startswith("uvicorn") or argv[0].replace("\\", "/").endswith("uvicorn/__main__.py")
         if argv
