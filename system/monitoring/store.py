@@ -30,7 +30,7 @@ from system.monitoring.stats import (
     histogram_percentile,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MINUTE_MS = 60_000
 HOUR_MS = 3_600_000
 DAY_MS = 86_400_000
@@ -118,7 +118,19 @@ _MIGRATION_1 = [
         name TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_ms INTEGER NOT NULL)""",
 ]
 
-MIGRATIONS: dict[int, list[str]] = {1: _MIGRATION_1}
+# v2 (Phase M4): indexes for the dashboard queries (checked with EXPLAIN QUERY
+# PLAN in tests/test_monitor_dashboard_queries.py). Only adds indexes - existing
+# data is kept as it is.
+_MIGRATION_2 = [
+    "CREATE INDEX IF NOT EXISTS ix_request_events_service_ts ON request_events(service, ts_ms)",
+    "CREATE INDEX IF NOT EXISTS ix_request_steps_step_ts ON request_steps(step, ts_ms)",
+    "CREATE INDEX IF NOT EXISTS ix_system_samples_metric_ts ON system_samples(metric, ts_ms)",
+    "CREATE INDEX IF NOT EXISTS ix_service_probes_service_ts ON service_probes(service, ts_ms)",
+    "CREATE INDEX IF NOT EXISTS ix_request_events_request_id ON request_events(request_id)",
+    "CREATE INDEX IF NOT EXISTS ix_events_service_ts ON events(service, last_ts_ms)",
+]
+
+MIGRATIONS: dict[int, list[str]] = {1: _MIGRATION_1, 2: _MIGRATION_2}
 
 _QUALITY_FIELDS = (
     "heartbeats",

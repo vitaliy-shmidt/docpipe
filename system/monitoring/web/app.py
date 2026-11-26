@@ -31,6 +31,7 @@ import secrets
 import threading
 import time
 import unicodedata
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -42,7 +43,8 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from system.monitoring.web import netaccess, totp
 from system.monitoring.web.authstore import AUTH_DB_FILENAME, AuthStore
-from system.monitoring.web.i18n import SECTIONS, TEXTS, choose_language
+from system.monitoring.web.dashboard import BadRequest, Dashboard, TelemetryUnavailable
+from system.monitoring.web.i18n import JS_KEYS, SECTIONS, TEXTS, choose_language
 from system.monitoring.web.passwords import MAX_PASSWORD_LENGTH, VerificationLimiter
 from system.monitoring.web.users import USERNAME, UsersFile, UsersUnavailable
 
@@ -80,7 +82,31 @@ ROUTES = {
     "/monitor/logout": {"POST"},
     "/monitor/api/v1/session": {"GET"},
     "/monitor/api/v1/status": {"GET"},
+    "/monitor/session/activity": {"POST"},
 }
+# Dashboard pages (Phase M4): path -> page name. A page view is user activity.
+PAGES = {
+    "/monitor": "overview",
+    "/monitor/activity": "activity",
+    "/monitor/clients": "clients",
+    "/monitor/performance": "performance",
+    "/monitor/server": "server",
+    "/monitor/security": "security",
+}
+# Read-only data API (Phase M4): never extends the idle time.
+DATA_API = {
+    "/monitor/api/v1/overview": "overview",
+    "/monitor/api/v1/activity": "activity",
+    "/monitor/api/v1/clients": "clients",
+    "/monitor/api/v1/performance": "performance",
+    "/monitor/api/v1/server": "server",
+    "/monitor/api/v1/security": "security",
+    "/monitor/api/v1/meta": "meta",
+}
+ROUTES.update({path: {"GET"} for path in (*PAGES, *DATA_API)})
+MAX_QUERY_BYTES = 1024
+MAX_QUERY_FIELDS = 12
+ACTIVITY_MIN_INTERVAL_MS = 30_000
 
 
 def wall_ms() -> int:
@@ -109,6 +135,7 @@ class Ctx:
     form: dict[str, str]
     decision: netaccess.AccessDecision
     lang: str
+    query: dict[str, str]
 
     @property
     def ip(self) -> str | None:
@@ -150,6 +177,11 @@ class MonitorWeb:
             + "</svg>"
         )
         self.static = _load_static()
+        self.dashboard = Dashboard(
+            settings.monitoring, monitor, self.store, settings.clients, clock=lambda: self._clock()
+        )
+        self._api_calls: dict[str, deque] = {}
+        self._api_lock = threading.Lock()
         self._cleanup_lock = threading.Lock()
         self._last_cleanup = 0
         self.locked_reason: str | None = None
@@ -169,6 +201,7 @@ class MonitorWeb:
             self._audit_safely("security_config_error", reason=problem, dedupe=True)
 
     def close(self) -> None:
+        self.dashboard.close()
         self.store.close()
 
     # --- ASGI ---------------------------------------------------------------------
@@ -263,7 +296,12 @@ class MonitorWeb:
                 return self._plain(403, lang)
             form = {k: v[0] for k, v in parsed.items() if len(v) == 1}
 
-        ctx = Ctx(scope, method, path, headers, cookies, form, decision, lang)
+        query = _query(scope.get("query_string") or b"")
+        if query is None:
+            return JSONResponse({"ok": False, "code": "invalid_query"}, status_code=400)
+        if query and path not in DATA_API:
+            return self._plain(404, lang)  # pages and auth routes take no query parameters
+        ctx = Ctx(scope, method, path, headers, cookies, form, decision, lang, query)
         try:
             return await run_in_threadpool(self._dispatch, ctx)
         except (Locked, UsersUnavailable) as exc:
@@ -281,8 +319,12 @@ class MonitorWeb:
         self._users()
         self._maybe_cleanup()
         key = (ctx.path, ctx.method)
-        if key == ("/monitor", "GET"):
-            return self._shell(ctx)
+        if ctx.path in PAGES:
+            return self._page(ctx, PAGES[ctx.path])
+        if ctx.path in DATA_API:
+            return self._data_api(ctx, DATA_API[ctx.path])
+        if key == ("/monitor/session/activity", "POST"):
+            return self._activity(ctx)
         if key == ("/monitor/login", "GET"):
             return self._login_page(ctx)
         if key == ("/monitor/login", "POST"):
@@ -437,21 +479,101 @@ class MonitorWeb:
 
     # --- pages -------------------------------------------------------------------------------
 
-    def _shell(self, ctx: Ctx) -> Response:
-        session = self._session(ctx, activity=True)
+    def _poll_seconds(self) -> dict:
+        return {
+            "activity": self.web.poll_activity_seconds,
+            "overview": self.web.poll_overview_seconds,
+            "server": self.web.poll_overview_seconds,
+            "clients": max(30, self.web.poll_overview_seconds),
+            "performance": max(30, self.web.poll_overview_seconds),
+            "security": max(30, self.web.poll_overview_seconds),
+        }
+
+    def _page(self, ctx: Ctx, page: str) -> Response:
+        session = self._session(ctx, activity=True)  # a page view is user activity
         if session is None:
             return RedirectResponse("/monitor/login", status_code=303)
         row, user, token = session
+        t = TEXTS[ctx.lang]
         return self._render(
-            "shell.html",
+            f"page_{page}.html",
             ctx.lang,
+            page=page,
             username=user.username,
             csrf=self._session_csrf(token),
             sections=SECTIONS,
+            poll_seconds=self._poll_seconds()[page],
+            js_texts=json.dumps({k: t[k] for k in JS_KEYS if k in t}, ensure_ascii=True),
+            clients=sorted(self.dashboard.known_clients),
+            services=sorted(s for s in self.dashboard_services()),
             idle_expires_ms=min(
                 row.last_activity_ms + self.web.session_idle_minutes * 60_000, row.absolute_expiry_ms
             ),
         )
+
+    @staticmethod
+    def dashboard_services() -> list[str]:
+        from system.monitoring.registry import SERVICES
+
+        return [s for s in SERVICES if s != "none"]
+
+    def _rate_limited(self, id_hash: str) -> bool:
+        """Per-session cap on data API requests (browser polling and filter
+        changes): protects DocPipe from runaway tabs or scripts."""
+        now = time.monotonic()
+        with self._api_lock:
+            calls = self._api_calls.setdefault(id_hash, deque())
+            while calls and now - calls[0] >= 60:
+                calls.popleft()
+            if len(calls) >= self.web.api_requests_per_minute:
+                return True
+            calls.append(now)
+            if len(self._api_calls) > 1000:  # bounded: drop idle entries
+                for key in [k for k, v in self._api_calls.items() if not v or now - v[-1] >= 60]:
+                    self._api_calls.pop(key, None)
+            return False
+
+    def _data_api(self, ctx: Ctx, name: str) -> Response:
+        session = self._session(ctx, activity=False)  # polling never extends the idle time
+        if session is None:
+            return JSONResponse({"ok": False, "code": "unauthorized"}, status_code=401)
+        row, user, token = session
+        if self._rate_limited(row.id_hash):
+            return JSONResponse({"ok": False, "code": "rate_limited"}, status_code=429)
+        try:
+            if name == "meta":
+                data = self.dashboard.meta(poll=self._poll_seconds(), web_settings=self.web)
+            elif name == "security":
+                data = self.dashboard.security(
+                    ctx.query,
+                    username=user.username,
+                    current_session=token,
+                    idle_ms=self.web.session_idle_minutes * 60_000,
+                )
+            else:
+                data = getattr(self.dashboard, name)(ctx.query)
+        except BadRequest as exc:
+            return JSONResponse({"ok": False, "code": exc.code}, status_code=400)
+        except TelemetryUnavailable:
+            return JSONResponse({"ok": False, "code": "telemetry_unavailable"}, status_code=503)
+        return JSONResponse(data)
+
+    def _activity(self, ctx: Ctx) -> Response:
+        """Explicit user action (e.g. a filter change) that may extend the idle
+        time. CSRF-protected, never called by timers. The server cannot prove a
+        human caused it - it only accepts it from the signed-in browser page
+        (session-bound token + same origin), at most every 30 s, and never
+        beyond the absolute timeout (unchanged)."""
+        session = self._session(ctx, activity=False)
+        if session is None:
+            return JSONResponse({"ok": False, "code": "unauthorized"}, status_code=401)
+        row, _, token = session
+        if not self._csrf_ok(ctx, self._session_csrf(token)):
+            return self._reject_csrf(ctx)
+        now = self._clock()
+        if now - row.last_activity_ms >= ACTIVITY_MIN_INTERVAL_MS:
+            self.store.touch_session(row.id_hash, now)
+        return Response(status_code=204)
 
     def _login_page(self, ctx: Ctx) -> Response:
         if self._session(ctx, activity=False) is not None:
@@ -625,6 +747,20 @@ class MonitorWeb:
                 "dropped": totals.get("requests_dropped_buffer", 0) + totals.get("requests_dropped_store", 0),
             }
         )
+
+
+def _query(raw: bytes) -> dict[str, str] | None:
+    """Strict query parsing: bounded size and field count, every name at
+    most once, valid UTF-8. None = reject the request."""
+    if len(raw) > MAX_QUERY_BYTES:
+        return None
+    try:
+        parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=False, max_num_fields=MAX_QUERY_FIELDS)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if any(len(v) != 1 for v in parsed.values()):
+        return None
+    return {k: v[0] for k, v in parsed.items()}
 
 
 def _ip(decision: netaccess.AccessDecision) -> str | None:

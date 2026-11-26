@@ -470,3 +470,89 @@ class AuthStore:
                 )
 
         self._tx(write)
+
+    # --- read-only view for the security dashboard (Phase M4) ------------------------------
+
+    def read_security(
+        self,
+        start_ms: int,
+        end_ms: int,
+        *,
+        events: list[str],
+        limit: int,
+        cursor: tuple[int, int] | None,
+        bucket_ms: int,
+        first_bucket: int,
+        username: str,
+        current_session: str,
+        now_ms: int,
+        idle_ms: int,
+    ) -> dict:
+        """Audit counts, timeline rows and one page of recent events in
+        [start_ms, end_ms), plus the signed-in user's own sessions. Session
+        hashes are reduced to the 12-character reference; nothing secret."""
+        marks = ", ".join("?" * len(events)) or "NULL"
+        with self._lock:
+            conn = self._db()
+            counts = dict(
+                conn.execute(
+                    "SELECT event, SUM(repeat_count) FROM audit WHERE ts_ms >= ? AND ts_ms < ? GROUP BY "
+                    "event",
+                    (start_ms, end_ms),
+                ).fetchall()
+            )
+            timeline = conn.execute(
+                "SELECT event, (ts_ms - ?) / ?, SUM(repeat_count) FROM audit WHERE ts_ms >= ? AND ts_ms < ? "
+                "GROUP BY 1, 2",
+                (first_bucket, bucket_ms, start_ms, end_ms),
+            ).fetchall()
+            cursor_sql, cursor_args = (
+                (" AND (ts_ms < ? OR (ts_ms = ? AND id < ?))", [cursor[0], cursor[0], cursor[1]])
+                if cursor
+                else ("", [])
+            )
+            rows = conn.execute(
+                "SELECT id, ts_ms, last_ts_ms, event, username, ip, reason, session_ref, repeat_count FROM "
+                "audit "
+                f"WHERE ts_ms >= ? AND ts_ms < ? AND event IN ({marks}){cursor_sql} "
+                "ORDER BY ts_ms DESC, id DESC LIMIT ?",
+                (start_ms, end_ms, *events, *cursor_args, limit + 1),
+            ).fetchall()
+            current_hash = token_hash(current_session) if current_session else ""
+            sessions = conn.execute(
+                "SELECT id_hash, created_ms, last_activity_ms, absolute_expiry_ms FROM sessions WHERE "
+                "username = ? "
+                "ORDER BY created_ms DESC",
+                (username,),
+            ).fetchall()
+        page = rows[:limit]
+        return {
+            "counts": counts,
+            "timeline_rows": timeline,
+            "events": [
+                {
+                    "id": r[0],
+                    "ts_ms": r[1],
+                    "last_ts_ms": r[2],
+                    "event": r[3],
+                    "username": r[4],
+                    "ip": r[5],
+                    "reason": r[6],
+                    "session_ref": r[7],
+                    "repeat_count": r[8],
+                }
+                for r in page
+            ],
+            "next_cursor": f"{page[-1][1]}.{page[-1][0]}" if len(rows) > limit and page else None,
+            "sessions": [
+                {
+                    "session_ref": h[:12],
+                    "created_ms": c,
+                    "last_activity_ms": a,
+                    "idle_expires_ms": min(a + idle_ms, x),
+                    "absolute_expires_ms": x,
+                    "current": hmac.compare_digest(h, current_hash),
+                }
+                for h, c, a, x in sessions
+            ],
+        }

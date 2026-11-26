@@ -68,6 +68,11 @@ class WebSettings:
     audit_days: int = 90
     max_audit_rows: int = 100_000
     auth_db_max_bytes: int = 64 * 1024 * 1024
+    # Dashboard polling (Phase M4), sent to the browser by the server; the
+    # data API additionally caps requests per session and minute.
+    poll_activity_seconds: int = 5
+    poll_overview_seconds: int = 15
+    api_requests_per_minute: int = 240
     login: LoginLimits = field(default_factory=LoginLimits)
 
 
@@ -80,6 +85,9 @@ _WEB_BOUNDS = {
     "audit_days": (1, 3650),
     "max_audit_rows": (1000, 10_000_000),
     "auth_db_max_bytes": (4 * 1024 * 1024, 1024 * 1024 * 1024),
+    "poll_activity_seconds": (2, 60),
+    "poll_overview_seconds": (5, 300),
+    "api_requests_per_minute": (30, 2000),
 }
 _LOGIN_BOUNDS = {
     "ip_max_failures": (3, 100),

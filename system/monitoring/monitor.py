@@ -88,6 +88,7 @@ class Monitor:
         self.settings = settings.monitoring
         self._clock = clock
         self.instance_id = uuid.uuid4().hex
+        self.started_ms = clock()  # process start of monitoring (uptime)
         self.build = read_build_info(env)
         self.known_clients = frozenset(settings.clients)
         self.known_models = frozenset(p.model for p in settings.models.values())
