@@ -30,7 +30,7 @@ from system.monitoring.stats import (
     histogram_percentile,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MINUTE_MS = 60_000
 HOUR_MS = 3_600_000
 DAY_MS = 86_400_000
@@ -130,7 +130,68 @@ _MIGRATION_2 = [
     "CREATE INDEX IF NOT EXISTS ix_events_service_ts ON events(service, last_ts_ms)",
 ]
 
-MIGRATIONS: dict[int, list[str]] = {1: _MIGRATION_1, 2: _MIGRATION_2}
+# v3 (Phase M5): paired throughput sums for AI steps and a snapshot table of the
+# AI steps currently running in each worker. A token count only enters a pair sum
+# together with its own measured duration (> 0) - weighted throughput is then
+# sum(tokens) / sum(seconds), never an average of per-call rates. Buckets written
+# before v3 keep NULL (= not available) unless the raw rows still cover them
+# completely; see _backfill_v3. Later additions to a NULL bucket keep it NULL
+# (NULL + x = NULL), so an incomplete bucket is never shown as a partial sum.
+_PAIR_COLUMNS = (
+    "eval_pair_tokens",
+    "eval_pair_ms",
+    "eval_pairs",
+    "prompt_pair_tokens",
+    "prompt_pair_ms",
+    "prompt_pairs",
+)
+BACKFILL_MAX_RAW_ROWS = 2_000_000
+
+
+def _backfill_v3(conn: sqlite3.Connection) -> None:
+    """Fill the pair sums of existing AI step rollups from raw rows - only for
+    buckets whose raw rows are all still present (same count), bounded by the
+    raw retention and a hard row cap."""
+    raw = conn.execute("SELECT COUNT(*) FROM request_steps WHERE step LIKE 'ai.%'").fetchone()[0]
+    if raw == 0 or raw > BACKFILL_MAX_RAW_ROWS:
+        return
+    for resolution in RESOLUTIONS:
+        rows = conn.execute(
+            "SELECT ts_ms - ts_ms % ?, route, step, outcome, COALESCE(ai_model, ''), COUNT(*), "
+            "COALESCE(SUM(CASE WHEN tokens_out IS NOT NULL AND ollama_eval_ms > 0 THEN tokens_out END), 0), "
+            "COALESCE(SUM(CASE WHEN tokens_out IS NOT NULL AND ollama_eval_ms > 0 THEN "
+            "ollama_eval_ms END), 0), "
+            "SUM(CASE WHEN tokens_out IS NOT NULL AND ollama_eval_ms > 0 THEN 1 ELSE 0 END), "
+            "COALESCE(SUM(CASE WHEN tokens_in IS NOT NULL AND ollama_prompt_eval_ms > 0 THEN "
+            "tokens_in END), 0), "
+            "COALESCE(SUM(CASE WHEN tokens_in IS NOT NULL AND ollama_prompt_eval_ms > 0 "
+            "THEN ollama_prompt_eval_ms END), 0), "
+            "SUM(CASE WHEN tokens_in IS NOT NULL AND ollama_prompt_eval_ms > 0 THEN 1 ELSE 0 END) "
+            "FROM request_steps WHERE step LIKE 'ai.%' GROUP BY 1, 2, 3, 4, 5",
+            (resolution,),
+        ).fetchall()
+        conn.executemany(
+            "UPDATE rollup_steps SET eval_pair_tokens = ?, eval_pair_ms = ?, eval_pairs = ?, "
+            "prompt_pair_tokens = ?, prompt_pair_ms = ?, prompt_pairs = ? WHERE resolution_ms = ? "
+            "AND bucket_ms = ? AND route = ? AND step = ? AND outcome = ? AND ai_model = ? AND count = ?",
+            [(*r[6:12], resolution, r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows],
+        )
+
+
+_MIGRATION_3 = [
+    *(
+        f"ALTER TABLE rollup_steps ADD COLUMN {c} {'REAL' if c.endswith('_ms') else 'INTEGER'}"
+        for c in _PAIR_COLUMNS
+    ),
+    """CREATE TABLE live_ai_steps (
+        instance_id TEXT NOT NULL, request_id TEXT NOT NULL, client_id TEXT, ai_model TEXT,
+        operation TEXT NOT NULL,
+        step TEXT NOT NULL, started_ms INTEGER NOT NULL, snapshot_ms INTEGER NOT NULL,
+        PRIMARY KEY (instance_id, request_id, step, started_ms)) WITHOUT ROWID""",
+    _backfill_v3,
+]
+
+MIGRATIONS: dict[int, list] = {1: _MIGRATION_1, 2: _MIGRATION_2, 3: _MIGRATION_3}
 
 _QUALITY_FIELDS = (
     "heartbeats",
@@ -203,6 +264,12 @@ _STEP_ADDS = (
     "tokens_out",
     "tokens_known",
     *BUCKET_COLUMNS,
+    "eval_pair_tokens",
+    "eval_pair_ms",
+    "eval_pairs",
+    "prompt_pair_tokens",
+    "prompt_pair_ms",
+    "prompt_pairs",
 )
 _STEP_UPSERT = _upsert_sql("rollup_steps", _STEP_KEYS, _STEP_ADDS, ("dur_min",), ("dur_max",))
 _SYS_UPSERT = _upsert_sql(
@@ -278,8 +345,15 @@ class MonitoringStore:
         for target in range(version + 1, SCHEMA_VERSION + 1):
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Another worker may have migrated while we waited for the lock.
+                if conn.execute("PRAGMA user_version").fetchone()[0] >= target:
+                    conn.execute("COMMIT")
+                    continue
                 for statement in MIGRATIONS[target]:
-                    conn.execute(statement)
+                    if callable(statement):
+                        statement(conn)
+                    else:
+                        conn.execute(statement)
                 conn.execute(f"PRAGMA user_version = {target}")
                 conn.execute("COMMIT")
             except Exception:
@@ -352,7 +426,12 @@ class MonitoringStore:
         )
 
     def write_batch(
-        self, instance_id: str, batch: Batch, now_ms: int, active: list[tuple[str, str, str, str, int]]
+        self,
+        instance_id: str,
+        batch: Batch,
+        now_ms: int,
+        active: list[tuple[str, str, str, str, int]],
+        active_ai: list[tuple] = (),
     ) -> int:
         """Persist one collector batch atomically. Returns persisted request count."""
         request_rows, step_rows = [], []
@@ -482,6 +561,7 @@ class MonitoringStore:
                             [0] * BUCKET_COUNT,
                             s.duration_ms,
                             s.duration_ms,
+                            [0, 0.0, 0, 0, 0.0, 0],  # v3 pair sums
                         ]
                     agg[0] += 1
                     agg[1] += s.duration_ms
@@ -497,6 +577,19 @@ class MonitoringStore:
                     agg[9][bucket_index(s.duration_ms)] += 1
                     agg[10] = min(agg[10], s.duration_ms)
                     agg[11] = max(agg[11], s.duration_ms)
+                    pairs = agg[12]
+                    if s.tokens_out is not None and s.ollama_eval_ms is not None and s.ollama_eval_ms > 0:
+                        pairs[0] += s.tokens_out
+                        pairs[1] += s.ollama_eval_ms
+                        pairs[2] += 1
+                    if (
+                        s.tokens_in is not None
+                        and s.ollama_prompt_eval_ms is not None
+                        and s.ollama_prompt_eval_ms > 0
+                    ):
+                        pairs[3] += s.tokens_in
+                        pairs[4] += s.ollama_prompt_eval_ms
+                        pairs[5] += 1
 
         quality: dict[int, QualityCounters] = {m: c for m, c in batch.losses.items()}
 
@@ -542,7 +635,7 @@ class MonitoringStore:
             conn.executemany(
                 _STEP_UPSERT,
                 [
-                    (*key, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], *a[9], a[10], a[11])
+                    (*key, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], *a[9], *a[12], a[10], a[11])
                     for key, a in step_roll.items()
                 ],
             )
@@ -586,6 +679,11 @@ class MonitoringStore:
                 "UPDATE instances SET last_heartbeat_ms = ? WHERE instance_id = ?", (now_ms, instance_id)
             )
             conn.execute("DELETE FROM live_requests WHERE instance_id = ?", (instance_id,))
+            conn.execute("DELETE FROM live_ai_steps WHERE instance_id = ?", (instance_id,))
+            conn.executemany(
+                "INSERT OR REPLACE INTO live_ai_steps VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [(instance_id, *item, now_ms) for item in active_ai],
+            )
             conn.executemany(
                 "INSERT OR REPLACE INTO live_requests VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
@@ -701,6 +799,7 @@ class MonitoringStore:
             ("data_quality", "bucket_ms < ?", (quality_cutoff,)),
             ("instances", "stopped_ms IS NOT NULL AND stopped_ms < ?", (quality_cutoff,)),
             ("live_requests", "snapshot_ms < ?", (now_ms - 10 * MINUTE_MS,)),
+            ("live_ai_steps", "snapshot_ms < ?", (now_ms - 10 * MINUTE_MS,)),
             ("leases", "expires_ms < ?", (now_ms - HOUR_MS,)),
         )
         for table, where, params in plain:

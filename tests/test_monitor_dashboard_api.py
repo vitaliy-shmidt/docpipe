@@ -562,7 +562,7 @@ def _plan(conn, sql, params) -> str:
 def test_core_queries_use_indexes(fake_stirling_holder, fake_ollama_holder, monkeypatch, tmp_path):
     with dashboard(fake_stirling_holder, fake_ollama_holder, monkeypatch, tmp_path) as client:
         conn = sqlite3.connect(str(client.app.state.monitoring.store.path))
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3  # v3 (M5)
         plans = {
             "raw range": _plan(
                 conn, "SELECT COUNT(*) FROM request_events WHERE ts_ms >= ? AND ts_ms < ?", (0, 1)
