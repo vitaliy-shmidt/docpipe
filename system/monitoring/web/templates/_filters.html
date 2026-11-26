@@ -1,0 +1,63 @@
+{# Filter bar. `show` lists the filters of the page. Values are re-validated by the server. #}
+<form class="dpm-filters card card-body py-2 mb-3" id="dpm-filters" autocomplete="off">
+  <div class="row g-2 align-items-end">
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label small mb-1" for="f-range">{{ t.range }}</label>
+      <select class="form-select form-select-sm" id="f-range" name="range">
+        {% for r in ranges %}
+        <option value="{{ r }}"{% if r == default_range %} selected{% endif %}>{{ t["range_" ~ r] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2 dpm-custom d-none">
+      <label class="form-label small mb-1" for="f-from">{{ t.from }}</label>
+      <input class="form-control form-control-sm" type="datetime-local" id="f-from" name="from">
+    </div>
+    <div class="col-6 col-md-3 col-xl-2 dpm-custom d-none">
+      <label class="form-label small mb-1" for="f-to">{{ t.to }}</label>
+      <input class="form-control form-control-sm" type="datetime-local" id="f-to" name="to">
+    </div>
+    {% if "client" in show %}
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label small mb-1" for="f-client">{{ t.filter_client }}</label>
+      <select class="form-select form-select-sm" id="f-client" name="client">
+        <option value="">{{ t.all }}</option>
+        {% for c in clients %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        <option value="unauthenticated">{{ t.unauthenticated }}</option>
+      </select>
+    </div>
+    {% endif %}
+    {% if "service" in show %}
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label small mb-1" for="f-service">{{ t.filter_service }}</label>
+      <select class="form-select form-select-sm" id="f-service" name="service">
+        <option value="">{{ t.all }}</option>
+        {% for s in services | sort %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    {% if "status" in show %}
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label small mb-1" for="f-status">{{ t.filter_status }}</label>
+      <select class="form-select form-select-sm" id="f-status" name="status">
+        <option value="">{{ t.all }}</option>
+        {% for s in ("success", "failed", "client_error", "server_error") %}
+        <option value="{{ s }}">{{ t["status_" ~ s] }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    {% if "category" in show %}
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label small mb-1" for="f-category">{{ t.filter_category }}</label>
+      <select class="form-select form-select-sm" id="f-category" name="category">
+        <option value="">{{ t.all }}</option>
+        {% for c in ("login", "failure", "lockout", "session", "denied", "config") %}
+        <option value="{{ c }}">{{ t["cat_" ~ c] }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <div class="col-auto dpm-custom d-none">
+      <button class="btn btn-sm btn-primary" type="submit">{{ t.apply }}</button>
+    </div>
+  </div>
+</form>

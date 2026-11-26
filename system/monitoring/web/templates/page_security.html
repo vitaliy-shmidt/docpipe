@@ -1,0 +1,28 @@
+{% extends "layout.html" %}
+{% block heading %}{{ t.nav_security }}{% endblock %}
+{% block filters %}{% with show=("category",), ranges=("1h", "24h", "7d", "30d", "custom"), default_range="24h" %}{% include "_filters.html" %}{% endwith %}{% endblock %}
+{% block content %}
+<div class="alert alert-secondary small d-flex gap-2" role="note">{{ icon("shield-lock") }}<span>{{ t.security_readonly }}</span></div>
+<section class="row g-3 mb-3" id="sec-kpis"></section>
+<div class="row g-3 mb-3">
+  <div class="col-12 col-xl-7">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("graph-up") }}<h2 class="h6 mb-0">{{ t.audit_timeline }}</h2>
+      <span class="ms-auto dpm-meta" data-meta="range"></span></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="sec-timeline" role="img" aria-label="{{ t.audit_timeline }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xl-5">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("person-circle") }}<h2 class="h6 mb-0">{{ t.sessions_own }}</h2></div>
+      <div class="card-body p-0"><div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+        <thead><tr><th scope="col">ID</th><th scope="col">{{ t.created }}</th><th scope="col">{{ t.last_activity }}</th>
+          <th scope="col">{{ t.absolute_expiry }}</th></tr></thead><tbody id="sec-sessions"></tbody></table></div></div></section>
+  </div>
+</div>
+<section class="card"><div class="card-header dpm-card-header">{{ icon("journal-text") }}<h2 class="h6 mb-0">{{ t.audit_events }}</h2></div>
+  <div class="card-body p-0"><div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.time }}</th><th scope="col">{{ t.event }}</th><th scope="col">{{ t.username }}</th>
+      <th scope="col">{{ t.ip }}</th><th scope="col">{{ t.reason }}</th><th scope="col" class="text-end">{{ t.repeats }}</th></tr></thead>
+    <tbody id="sec-events"></tbody></table></div>
+    <div class="dpm-empty text-center p-4 d-none" id="sec-empty"><p class="mb-0">{{ t.no_data }}</p></div></div>
+  <div class="card-footer text-center"><button class="btn btn-sm btn-outline-secondary d-none" type="button" id="sec-more">{{ t.more }}</button></div>
+</section>
+{% endblock %}

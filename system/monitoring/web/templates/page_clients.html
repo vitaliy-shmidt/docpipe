@@ -1,0 +1,36 @@
+{% extends "layout.html" %}
+{% block heading %}{{ t.nav_clients }}{% endblock %}
+{% block filters %}{% with show=("service",), ranges=("1h", "24h", "7d", "30d", "custom"), default_range="24h" %}{% include "_filters.html" %}{% endwith %}{% endblock %}
+{% block content %}
+<div class="dpm-empty card card-body text-center d-none" id="cl-empty">
+  <p class="mb-1 fw-semibold">{{ t.no_data }}</p><p class="text-body-secondary small mb-0">{{ t.no_data_hint }}</p>
+</div>
+<div class="row g-3 mb-3">
+  <div class="col-12 col-xl-4">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("people") }}
+      <h2 class="h6 mb-0">{{ t.share }}</h2><span class="ms-auto dpm-meta" data-meta="range"></span></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="cl-share" role="img" aria-label="{{ t.share }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xl-8">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("graph-up") }}
+      <h2 class="h6 mb-0">{{ t.clients_over_time }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="cl-series" role="img" aria-label="{{ t.clients_over_time }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12">
+    <section class="card"><div class="card-header dpm-card-header">{{ icon("activity") }}
+      <h2 class="h6 mb-0">{{ t.previous_period }}</h2></div>
+      <div class="card-body"><div class="dpm-chart dpm-chart-sm"><canvas id="cl-compare" role="img" aria-label="{{ t.previous_period }}"></canvas></div></div></section>
+  </div>
+</div>
+<section class="card mb-3"><div class="card-header dpm-card-header">{{ icon("journal-text") }}<h2 class="h6 mb-0">{{ t.nav_clients }}</h2></div>
+  <div class="card-body p-0"><div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.client }}</th><th scope="col" class="text-end">{{ t.requests }}</th>
+      <th scope="col" class="text-end">{{ t.share }}</th><th scope="col" class="text-end">{{ t.success_rate }}</th>
+      <th scope="col" class="text-end">{{ t.avg }}</th><th scope="col" class="text-end">{{ t.p95 }}</th>
+      <th scope="col" class="text-end">{{ t.documents }}</th><th scope="col" class="text-end">{{ t.pages }}</th>
+      <th scope="col" class="text-end">{{ t.bytes_in }}</th><th scope="col" class="text-end">{{ t.bytes_out }}</th>
+      <th scope="col" class="text-end">{{ t.ai_calls }}</th><th scope="col" class="text-end">{{ t.tokens_in }}</th>
+      <th scope="col" class="text-end">{{ t.tokens_out }}</th><th scope="col">{{ t.usage_by_service }}</th></tr></thead>
+    <tbody id="cl-table"></tbody></table></div></div></section>
+<section class="card"><div class="card-body" id="cl-quality"></div></section>
+{% endblock %}

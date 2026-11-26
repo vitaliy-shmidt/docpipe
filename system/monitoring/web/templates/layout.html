@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block page %}{{ page }}{% endblock %}
+{% block scripts %}
+  <script src="/monitor/static/vendor/chartjs/chart.umd.js" defer></script>
+  <script src="/monitor/static/js/dashboard.js" defer></script>
+{% endblock %}
+{% block body %}
+<div id="dpm-app" data-poll="{{ poll_seconds }}" data-csrf="{{ csrf }}" data-texts="{{ js_texts }}"
+     data-idle="{{ idle_expires_ms }}">
+<header class="navbar bg-body border-bottom sticky-top dpm-topbar">
+  <div class="container-fluid gap-2 flex-nowrap">
+    <button class="btn btn-outline-secondary d-lg-none" type="button" data-bs-toggle="offcanvas"
+            data-bs-target="#dpm-nav" aria-controls="dpm-nav" aria-label="{{ t.menu }}">{{ icon("list") }}</button>
+    <span class="navbar-brand d-flex align-items-center gap-2 me-auto text-truncate">
+      <span class="dpm-brand-mark dpm-brand-mark-sm">{{ icon("shield-lock") }}</span>
+      <span class="d-none d-sm-inline">{{ t.title }}</span>
+    </span>
+    <span class="dpm-freshness small text-body-secondary text-nowrap" id="dpm-freshness" role="status"
+          aria-live="polite"></span>
+    <button type="button" class="btn btn-sm btn-outline-secondary" id="dpm-live-toggle" aria-pressed="true">
+      <span class="dpm-live-dot" aria-hidden="true"></span><span class="dpm-live-label">{{ t.live }}</span>
+    </button>
+    <div class="d-none d-xl-flex">{% include "_prefs.html" %}</div>
+    <span class="text-body-secondary small d-none d-md-inline text-nowrap">{{ icon("person-circle") }}
+      <strong class="text-body">{{ username }}</strong></span>
+    <form method="post" action="/monitor/logout" class="m-0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="btn btn-sm btn-outline-danger" type="submit" aria-label="{{ t.logout }}">{{ icon("box-arrow-right") }}
+        <span class="d-none d-sm-inline">{{ t.logout }}</span></button>
+    </form>
+  </div>
+</header>
+
+<div class="container-fluid">
+  <div class="row">
+    <nav class="col-lg-3 col-xxl-2 dpm-sidebar offcanvas-lg offcanvas-start border-end" tabindex="-1" id="dpm-nav"
+         aria-label="{{ t.menu }}">
+      <div class="offcanvas-header d-lg-none">
+        <span class="h5 mb-0">{{ t.menu }}</span>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#dpm-nav"
+                aria-label="Close"></button>
+      </div>
+      <div class="offcanvas-body d-block p-2">
+        <div class="d-xl-none mb-3">{% include "_prefs.html" %}</div>
+        <ul class="nav nav-pills flex-column gap-1">
+          {% for key, icon_name, phase, url in sections %}
+          <li class="nav-item">
+            {% if phase is none %}
+            <a class="nav-link d-flex align-items-center gap-2{% if url.rstrip('/').endswith(page) or (page == 'overview' and url == '/monitor') %} active{% endif %}"
+               href="{{ url }}"{% if url.rstrip('/').endswith(page) or (page == 'overview' and url == '/monitor') %} aria-current="page"{% endif %}>
+              {{ icon(icon_name) }}<span>{{ t[key] }}</span></a>
+            {% else %}
+            <span class="nav-link disabled d-flex align-items-center gap-2" aria-disabled="true">
+              {{ icon(icon_name) }}<span>{{ t[key] }}</span>
+              <span class="badge rounded-pill text-bg-secondary ms-auto">{{ t.planned }} {{ phase }}</span></span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </nav>
+
+    <main class="col-lg-9 col-xxl-10 px-3 px-md-4 py-3 py-md-4 dpm-main">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <h1 class="h3 mb-0">{% block heading %}{% endblock %}</h1>
+      </div>
+      <div class="alert alert-warning d-none" id="dpm-notice" role="alert"></div>
+      {% block filters %}{% endblock %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+</div>
+{% endblock %}

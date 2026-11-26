@@ -1,0 +1,51 @@
+{% extends "layout.html" %}
+{% block heading %}{{ t.nav_overview }}{% endblock %}
+{% block filters %}{% with show=(), ranges=("live", "1h", "24h", "7d", "30d", "custom"), default_range="1h" %}{% include "_filters.html" %}{% endwith %}{% endblock %}
+{% block content %}
+<section class="row g-3 mb-3" aria-label="{{ t.health }}" id="ov-health"></section>
+
+<section class="row g-3 mb-3" id="ov-kpis" aria-label="{{ t.requests }}"></section>
+
+<div class="dpm-empty card card-body text-center d-none" id="ov-empty">
+  <div class="dpm-empty-icon mb-2">{{ icon("hourglass-split") }}</div>
+  <p class="mb-1 fw-semibold">{{ t.no_data }}</p>
+  <p class="text-body-secondary small mb-0">{{ t.no_data_hint }}</p>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-12 col-xxl-8">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("activity") }}
+      <h2 class="h6 mb-0">{{ t.requests_over_time }}</h2><span class="ms-auto dpm-meta" data-meta="range"></span></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="ov-requests" role="img" aria-label="{{ t.requests_over_time }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xxl-4">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("info-circle") }}
+      <h2 class="h6 mb-0">{{ t.data_quality }}</h2></div>
+      <div class="card-body" id="ov-quality"></div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("clock") }}
+      <h2 class="h6 mb-0">{{ t.latency_over_time }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="ov-latency" role="img" aria-label="{{ t.latency_over_time }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("people") }}
+      <h2 class="h6 mb-0">{{ t.clients_over_time }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="ov-clients" role="img" aria-label="{{ t.clients_over_time }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("hdd-stack") }}
+      <h2 class="h6 mb-0">{{ t.server_load }}</h2></div>
+      <div class="card-body">
+        <div class="row g-2 mb-3" id="ov-system"></div>
+        <div class="dpm-chart dpm-chart-sm"><canvas id="ov-load" role="img" aria-label="{{ t.server_load }}"></canvas></div>
+      </div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("key") }}
+      <h2 class="h6 mb-0">{{ t.build }}</h2></div>
+      <div class="card-body"><dl class="row mb-0 small" id="ov-build"></dl>
+        <p class="small text-body-secondary mt-2 mb-0">{{ t.build_hint }}</p></div></section>
+  </div>
+</div>
+{% endblock %}
