@@ -42,7 +42,7 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _start(monkeypatch, tmp_path, *, seeded: bool, gap=None):
+def _start(monkeypatch, tmp_path, *, seeded: bool, gap=None, **seed_kwargs):
     import uvicorn
 
     use_fast_argon2(monkeypatch)
@@ -81,6 +81,7 @@ def _start(monkeypatch, tmp_path, *, seeded: bool, gap=None):
         auth.close()
     monkeypatch.setattr(main_module, "load_settings", lambda: settings)
     port = _free_port()
+            **seed_kwargs,
     srv = uvicorn.Server(
         uvicorn.Config(main_module.app, host="127.0.0.1", port=port, proxy_headers=False, log_level="warning")
     )

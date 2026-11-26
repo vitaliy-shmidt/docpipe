@@ -631,7 +631,7 @@ def test_large_database_queries_stay_fast(fake_stirling_holder, fake_ollama_hold
                 }
                 monitor.store.write_batch("big", Batch(batch, [], losses), now, [])
         timings = {}
-        for name in ("overview", "clients", "performance", "server", "activity"):
+        for name in ("overview", "clients", "performance", "server", "activity", "ollama", "stirling"):
             for rng_key in ("1h", "24h", "7d"):
                 started = time.perf_counter()
                 response = get(client, name, range=rng_key)

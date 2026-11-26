@@ -29,7 +29,11 @@ ROUTES = [
     ("/api/v1/documents/forms/inspect", "forms", ["forms.inspect", "stirling.ocr"]),
     ("/api/v1/documents/forms/fill", "forms", ["forms.fill"]),
     ("/api/v1/health", "system", []),
+    ("/api/v1/assistant/query", "assistant", ["ai.generate"]),
+    ("/api/v1/documents/warmup", "ai", ["ai.warmup"]),
 ]
+# Configured model names of the test settings (tests/conftest.py TEST_MODEL_PROFILES).
+MODELS = ("light-test-model", "standard-test-model")
 STEP_MS = {
     "stirling.extract_text": 180,
     "stirling.ocr": 2400,
@@ -37,6 +41,7 @@ STEP_MS = {
     "ai.generate": 6500,
     "forms.inspect": 3200,
     "forms.fill": 450,
+    "ai.warmup": 400,
 }
 
 
@@ -45,8 +50,9 @@ def synthetic_request(
     ts: int,
     client: str | None,
     route_index: int | None = None,
-    model: str = "synthetic-model",
+    model: str | None = None,
 ) -> FinishedRequest:
+    model = model or rng.choice(MODELS)
     route, service, steps = ROUTES[route_index if route_index is not None else rng.randrange(len(ROUTES))]
     status = rng.choices([200, 200, 200, 200, 200, 400, 401, 502, 504], k=1)[0] if client else 401
     if not client:
@@ -57,25 +63,40 @@ def synthetic_request(
     records, total = [], 2.0
     for step in steps:
         dur = max(1.0, rng.lognormvariate(0, 0.45) * STEP_MS[step])
-        rec = StepRecord(step=step, outcome="ok" if status < 500 else "timeout", duration_ms=round(dur, 1))
+        failed = status >= 500
+        outcome = "ok" if not failed else ("upstream_unavailable" if status == 502 else "timeout")
+        rec = StepRecord(step=step, outcome=outcome, duration_ms=round(dur, 1))
         if step == "ai.generate":
             load = rng.choice([0.0, 0.0, 0.0, 1800.0])
+            older_ollama = rng.random() < 0.15  # reports token counts but no eval duration
+            rec = StepRecord(
+                step=step,
+                outcome="ok" if not failed else ("ai_unavailable" if status == 502 else "ai_timeout"),
+                duration_ms=round(dur + load, 1),
+                ollama_total_ms=None if failed else round(dur + load - 20, 1),
+                ollama_load_ms=None if failed else load,
+                ollama_prompt_eval_ms=None if failed or older_ollama else round(dur * 0.35, 1),
+                ollama_eval_ms=None if failed or older_ollama else round(dur * 0.6, 1),
+                tokens_in=None if failed else rng.randrange(800, 4000),
+                tokens_out=None if failed else rng.randrange(80, 400),
+                ai_model=model,
+            )
+        elif step == "ai.warmup":
             rec = StepRecord(
                 step=step,
                 outcome=rec.outcome,
-                duration_ms=round(dur + load, 1),
-                ollama_total_ms=round(dur + load - 20, 1),
-                ollama_load_ms=load,
-                ollama_prompt_eval_ms=round(dur * 0.35, 1),
-                ollama_eval_ms=round(dur * 0.6, 1),
-                tokens_in=rng.randrange(800, 4000),
-                tokens_out=rng.randrange(80, 400),
+                duration_ms=round(dur + 900, 1),
+                ollama_total_ms=round(dur + 880, 1),
+                ollama_load_ms=900.0,
+                ollama_prompt_eval_ms=0.0,
+                ollama_eval_ms=0.0,
                 ai_model=model,
             )
         records.append(rec)
         if step != "stirling.ocr" or "forms.inspect" not in steps:
             total += rec.duration_ms
     ai = [r for r in records if r.step == "ai.generate"]
+    tokens_known = bool(ai) and all(r.tokens_in is not None and r.tokens_out is not None for r in ai)
     return FinishedRequest(
         request_id=str(uuid.UUID(int=rng.getrandbits(128))),
         ts_ms=ts,
@@ -90,11 +111,11 @@ def synthetic_request(
         bytes_out=rng.randrange(200, 90_000),
         documents=1 if status == 200 and service in ("documents", "forms") else 0,
         pages=rng.randrange(1, 12) if service == "forms" and status == 200 else None,
-        ai_provider="ollama" if ai else None,
-        ai_model=model if ai else None,
+        ai_provider="ollama" if ai or any(r.step == "ai.warmup" for r in records) else None,
+        ai_model=model if ai or any(r.step == "ai.warmup" for r in records) else None,
         ai_calls=len(ai),
-        tokens_in=sum(r.tokens_in for r in ai) if ai else None,
-        tokens_out=sum(r.tokens_out for r in ai) if ai else None,
+        tokens_in=sum(r.tokens_in for r in ai) if tokens_known else None,
+        tokens_out=sum(r.tokens_out for r in ai) if tokens_known else None,
         steps_truncated=0,
         steps=records,
     )
@@ -111,6 +132,9 @@ def seed(
     dropped_minute: int | None = None,
     instance_id: str = "seed-instance",
     seed_value: int = 7,
+    ollama_down: tuple[int, int] | None = None,
+    probes_until_ago: int = 0,
+    stirling_down: tuple[int, int] | None = None,
 ) -> dict:
     """Write `minutes` of synthetic history ending at now_ms. `gap` = (from, to)
     minutes ago without collector heartbeats and requests; `dropped_minute` =
@@ -190,17 +214,48 @@ def seed(
             Sample("gpu.memory_used_bytes", "gpu", None, "unavailable", "not_configured"),
         ]
         store.write_samples(instance_id, minute_ts + 30_000, samples)
-        if m % 2 == 0:
+        if m % 2 == 0 and ago >= probes_until_ago:
+            probe_ts = minute_ts + 10_000
+            o_down = ollama_down and ollama_down[1] <= ago <= ollama_down[0]
+            s_down = stirling_down and stirling_down[1] <= ago <= stirling_down[0]
             store.write_probes(
-                minute_ts + 10_000,
+                probe_ts,
                 [
-                    ProbeResult("stirling", "ok", 200, round(8 + 5 * rng.random(), 1), "3.2.2"),
-                    ProbeResult("ollama", "ok", 200, round(3 + 2 * rng.random(), 1), "0.40.18"),
+                    ProbeResult("stirling", "timeout", None, 3000.0)
+                    if s_down
+                    else ProbeResult("stirling", "ok", 200, round(8 + 5 * rng.random(), 1), "3.2.2"),
+                    ProbeResult("ollama", "connection_error", None, 1.2)
+                    if o_down
+                    else ProbeResult("ollama", "ok", 200, round(3 + 2 * rng.random(), 1), "0.40.18"),
                 ],
-                [
+                []
+                if o_down
+                else [
                     OllamaModel(
-                        "synthetic-model", True, True, 1_200_000_000, 0, "qwen2", "1.5B", "Q4_K_M", 8192, None
-                    )
+                        "light-test-model",
+                        True,
+                        True,
+                        1_200_000_000,
+                        1_050_000_000,
+                        "qwen2",
+                        "1.5B",
+                        "Q4_K_M",
+                        8192,
+                        probe_ts + 15 * MINUTE,
+                    ),
+                    OllamaModel(
+                        "standard-test-model",
+                        True,
+                        False,
+                        4_700_000_000,
+                        None,
+                        "llama",
+                        "8B",
+                        "Q4_0",
+                        None,
+                        None,
+                    ),
+                    OllamaModel("legacy-model:latest", True, False, None, None, None, None, None, None, None),
                 ],
             )
     store._db().execute(
