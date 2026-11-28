@@ -91,7 +91,7 @@
 :root {
   --dpm-c1: #2a6fdb; --dpm-c2: #0f9d8a; --dpm-c3: #7a5af5; --dpm-c4: #d64545;
   --dpm-c5: #e08a1e; --dpm-c6: #6b7a90; --dpm-c7: #c2459c; --dpm-c8: #3a9b3a;
-  --dpm-ok: #198754; --dpm-warn: #c98a04; --dpm-bad: #d63939; --dpm-muted: #8a94a3;
+  --dpm-ok: #198754; --dpm-warn: #c98a04; --dpm-bad: #d63939; --dpm-muted: #646c79; /* WCAG AA on white and tile backgrounds (M7) */
 }
 [data-bs-theme="dark"] {
   --dpm-c1: #6ea2ff; --dpm-c2: #36c3ae; --dpm-c3: #a28bff; --dpm-c4: #ff7a7a;
@@ -105,7 +105,7 @@
 
 .dpm-chart { position: relative; height: 260px; }
 .dpm-chart-sm { height: 180px; }
-@media (max-width: 575.98px) { .dpm-chart { height: 220px; } .dpm-chart-sm { height: 160px; } }
+@media (max-width: 575.98px) { .dpm-chart { height: 300px; } .dpm-chart-sm { height: 200px; } }  /* legends wrap on phones (M7) */
 
 /* KPI tone is carried by the value itself, not by a coloured card edge. */
 .dpm-kpi-ok .dpm-kpi-value { color: var(--dpm-ok); }
@@ -157,3 +157,8 @@
 .dpm-topbar .dpm-freshness { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dpm-kpi .card-body { min-width: 0; }
 .dpm-kpi-label, .dpm-kpi-head .badge { overflow-wrap: anywhere; }
+
+/* Phase M7 contrast review: Bootstrap keeps the light-mode outline colours in dark mode
+   (3.3:1 on the dark top bar). Text of outline buttons gets AA contrast there. */
+[data-bs-theme="dark"] .btn-outline-secondary { --bs-btn-color: #adb5bd; --bs-btn-border-color: #6c757d; }
+[data-bs-theme="dark"] .btn-outline-danger { --bs-btn-color: #ea868f; --bs-btn-border-color: #ea868f; }
