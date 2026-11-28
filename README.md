@@ -173,7 +173,7 @@ cp config.example.yaml config.yaml
 # (only if you use AI analysis) set ollama.base_url and define at least
 # the model profiles your active modes default to - see "Model profiles" below
 
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt   # exact release versions
 uvicorn system.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -188,6 +188,21 @@ docker compose up --build
 Stirling and Ollama don't have to run in the same Compose stack — point
 `stirling.base_url`/`ollama.base_url` (or `STIRLING_URL`/`OLLAMA_URL`) at
 any existing instances instead; Compose here is convenience only.
+
+**Release images** are reproducible:
+
+- the `Dockerfile` pins the Python base image by digest;
+- `constraints.txt` fixes every installed package version (`requirements.txt`
+  keeps the declared ranges);
+- build metadata is passed as build arguments:
+
+```bash
+docker build --build-arg DOCPIPE_BUILD_COMMIT="$(git rev-parse HEAD)"   --build-arg DOCPIPE_IMAGE_TAG="<version>-$(git rev-parse --short HEAD)"   --build-arg DOCPIPE_BUILD_LOCAL_CHANGES=false -t docpipe:<version>-<commit> .
+```
+
+No source patches are needed for a production build. Ollama's `think`
+setting is configuration (`ollama.think`, see "Ollama think"). Release
+checklist: [docs/operations/monitoring-operations.md](docs/operations/monitoring-operations.md).
 
 ### Try it
 

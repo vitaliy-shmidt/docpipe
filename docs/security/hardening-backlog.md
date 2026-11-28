@@ -33,7 +33,7 @@ der Quellcode, nicht eine bestimmte Installation.
 | M3-2 | Proxy-Header-Auswertung nur für den Uvicorn-CLI-Start technisch erkannt; andere Launcher nicht | niedrig | niedrig | nein. Das Image startet korrekt; der Prüfpunkt steht in der Betriebsanleitung §4.2. |
 | M3-3 | Eigentümer und Rechte unter Linux: Benutzerdatei (Eigentümer, 0600) und Datenbanken (0600, inklusive `-wal`/`-shm`) werden geprüft bzw. gesetzt. Ein **bereits vorhandenes** Datenverzeichnis behält seine Rechte. | niedrig | niedrig | nein. Das Verzeichnis mit 0700 anlegen (Betriebsanleitung §4.1). |
 | M3-4 | Sessions nicht an die IP gebunden | niedrig | niedrig | nein |
-| M7-1 | `requirements.txt` mit Versionsbereichen: ein neuer Build kann andere Abhängigkeiten ziehen. `pip-audit` (Stand M7): keine bekannten Schwachstellen. | niedrig | mittel | nein. Für das Release-Image `pip freeze` festhalten und gegen dieses Set prüfen. |
+| M7-1 | `requirements.txt` mit Versionsbereichen: ein neuer Build kann andere Abhängigkeiten ziehen. `pip-audit` (Stand M7): keine bekannten Schwachstellen. | niedrig | mittel | **Erledigt nach M7:** `constraints.txt` fixiert alle Pakete, das Basis-Image ist per Digest fixiert; `pip-audit` gegen diesen Stand: keine Befunde. |
 | M7-2 | Backups der Auth-Datenbank enthalten Sessions und Schlüsselmaterial | mittel, falls ein Backup offenliegt | – | nein. Backups wie Geheimnisse behandeln (Betriebsanleitung §8). |
 
 Keine der Positionen ist für den Monitoring-Code release-blockierend. Release-blockierende

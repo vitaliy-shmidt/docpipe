@@ -1716,15 +1716,14 @@ Screenshot-Artefakt).
 
 **Release-blockierend** (Betrieb, nicht Code):
 
-1. **Ollama `think`-Patch:** liegt nicht im Repository; ohne nachweislich
-   angewendeten Patch keine produktive Freigabe (Betriebsanleitung §2.1). Eine
-   abwärtskompatible Konfigurationsoption ist als eigene Aufgabe beschrieben.
+1. ~~**Ollama `think`-Patch**~~ – **erledigt nach M7:** jetzt die
+   Konfigurationsoption `ollama.think` (§18); in Produktion `think: false` setzen.
 2. **PDF4Fill-Workflow** auf dem Produktionssystem mit synthetischen Formularen
    verifizieren (§17.7).
 3. **Ressourcenmessung auf dem Zielsystem** nach Aktivierung der Erfassung
    (Schritt 8). Die lokalen Werte aus §17.5 ersetzen das nicht.
-4. **Abhängigkeiten des Release-Images** mit `pip freeze` festhalten und prüfen
-   (Versionsbereiche in `requirements.txt`).
+4. ~~**Abhängigkeiten des Release-Images**~~ – **erledigt nach M7:** fixiert in
+   `constraints.txt`, Basis-Image per Digest (§18).
 
 **Nicht blockierend, dokumentiert:**
 
@@ -1733,3 +1732,69 @@ Screenshot-Artefakt).
 - Statusprüfungen im Collector-Thread (begrenzt, §17.5);
 - keine GPU-Werte ohne Provider;
 - teilweise Tokens/s aus Pre-v3-Buckets.
+
+## 18. Release-Vorbereitung nach M7
+
+M1 bis M7 sind technisch abgenommen; M6 entfällt endgültig. Es kommen keine
+weiteren Monitoring-Funktionen dazu, kein Probe-Thread, keine
+GPU-Infrastruktur und keine Client-Administration. `allowlist` bleibt der
+produktive Zugangsmodus; `public_mfa` ist bis zu einer separaten
+Sicherheitsfreigabe nicht für den Einsatz vorgesehen.
+
+### 18.1 `ollama.think`
+
+Die lokale Quellcode-Anpassung des bisherigen Produktionsimages
+(`"think": False`) ist durch eine abwärtskompatible Konfigurationsoption
+ersetzt.
+
+| Wert | Verhalten |
+|---|---|
+| fehlt / `null` | Kein Feld wird gesendet; das entspricht dem unveränderten Repository. |
+| `false` | `"think": false`; für die Produktion vorgesehen |
+| `true` | `"think": true` |
+| alles andere | Konfigurationsfehler beim Start |
+
+**Angewendet** auf jede strukturierte Generierung über den einen
+`OllamaClient` (Erstaufruf und der eine Reparaturaufruf von
+`generate_structured`):
+
+- `/documents/analyze` mit allen Extraktionsmodi inklusive Vertragsextraktion;
+- `/lab/analyze`;
+- `/assistant/query`;
+- das Diagnosewerkzeug `system.tools.contract_diagnose`.
+
+**Nicht angewendet** auf das Warm-up: Es generiert nichts, deshalb kann
+`think: true` ein Warm-up nie scheitern lassen.
+
+**Verhalten:**
+
+- Gelesen wird nur `response`. Ein `thinking`-Text wird nicht verwendet,
+  gespeichert, geloggt oder vom Monitoring erfasst.
+- Ein Modell ohne Thinking-Unterstützung, das `think: true` mit einem
+  HTTP-Fehler beantwortet, ergibt `ai_processing_failed`, ohne Wiederholung
+  und ohne anderes Modell.
+- Ältere Ollama-Versionen ignorieren das unbekannte Feld. Das ist eine Annahme
+  aus dem JSON-Verhalten von Ollama; gegen eine echte ältere Version wurde es
+  nicht getestet.
+- API-Verträge, Monitoring, HubDix und PDF4Fill sind unverändert. Getestet:
+  identische Antworten für alle Werte, mit Monitoring an und aus
+  (`tests/test_ollama_think.py`).
+
+### 18.2 Reproduzierbarer Build
+
+- **Basis-Image:** per Digest fixiert (`python:3.12.16-slim@sha256:5b5fe805…`).
+- **Pakete:** `constraints.txt` fixiert alle 43 Pakete auf die Versionen des
+  Images vom 28.11.2026. Es wurde keine Version angehoben; `requirements.txt`
+  ist unverändert.
+- **Build-Metadaten:** als Build-Argumente, sichtbar als Umgebung und als
+  OCI-Labels.
+- **CI:** Sie testet mit denselben Versionen.
+- **Lokal geprüft:**
+  - zwei Builds ohne Cache mit identischen Paketen, identisch zu
+    `constraints.txt`;
+  - `pip check` ohne Befund;
+  - Build-Info und Labels korrekt;
+  - Container als UID 1000 healthy.
+- **Ablauf:** Bauen und die 14-Schritte-Checkliste beschreibt die
+  [Betriebsanleitung §2–§3](../operations/monitoring-operations.md).
+

@@ -26,69 +26,106 @@ Offene Sicherheitspunkte: [hardening-backlog.md](../security/hardening-backlog.m
 
 ## 2. Release-Build
 
-1. **Quellstand** ist ein Commit dieses Repositorys, ohne weitere Änderungen
-   außer den unten genannten, ausdrücklich dokumentierten lokalen Patches.
-2. **Image-Tag eindeutig und unveränderlich**, z. B.
-   `docpipe:<version>-<kurz-commit>[-<patch-slug>]`. Das Tag eines laufenden
-   Images wird nie überschrieben.
-3. **Build-Informationen** werden als Umgebungsvariablen gesetzt. Die
-   Übersicht zeigt sie an.
-   - `DOCPIPE_BUILD_COMMIT=<commit>`
-   - `DOCPIPE_IMAGE_TAG=<tag>`
-   - `DOCPIPE_BUILD_LOCAL_CHANGES=true|false`
-   - `DOCPIPE_BUILD_LOCAL_PATCHES=<slug,...>`, z. B. `ollama-think-false`
-4. **Das bisherige produktive Image bleibt als Rollback-Image erhalten**, samt
-   Tag, Compose-Stand und Konfigurationssicherung.
+Der Build ist reproduzierbar und braucht **keine manuellen Quellcode-Patches**
+mehr.
 
-### 2.1 Pflichtprüfpunkt: Ollama `think`-Patch
+| Baustein | Umsetzung |
+|---|---|
+| Quellstand | genau ein Commit dieses Repositorys, aus einer **separaten, sauberen Arbeitskopie** (`git status` leer) |
+| Basis-Image | im `Dockerfile` per Digest fixiert (`python:3.12.16-slim@sha256:…`) |
+| Python-Pakete | `constraints.txt` fixiert alle 43 Pakete; das `Dockerfile` installiert `-r requirements.txt -c constraints.txt` |
+| Build-Metadaten | Build-Argumente, im Image als Umgebung (Monitoring-Übersicht) und als OCI-Labels sichtbar |
+| Image-Tag | eindeutig und unveränderlich, z. B. `docpipe:<version>-<kurz-commit>`; ein Tag wird nie überschrieben |
 
-Das derzeit produktive Image enthält eine **lokale Anpassung**, die nicht im
-Repository liegt: `system/services/ollama.py` sendet `"think": False` im
-Payload von `/api/generate`. Ein Build aus dem Repository allein **verliert
-diese Anpassung**.
+```sh
+git clone <repository> docpipe-release && cd docpipe-release
+git checkout <commit>                      # der freigegebene Commit
+git status --porcelain                     # muss leer sein
+docker build \
+  --build-arg DOCPIPE_BUILD_COMMIT="$(git rev-parse HEAD)" \
+  --build-arg DOCPIPE_IMAGE_TAG="<version>-$(git rev-parse --short HEAD)" \
+  --build-arg DOCPIPE_BUILD_LOCAL_CHANGES=false \
+  -t docpipe:<version>-$(git rev-parse --short HEAD) .
+docker run --rm docpipe:<tag> pip freeze > docpipe-<tag>-packages.txt
+diff <(grep -v '^#' constraints.txt | sort -f) <(sort -f docpipe-<tag>-packages.txt)   # keine Ausgabe
+docker run --rm docpipe:<tag> pip check                                               # "No broken requirements"
+docker image inspect docpipe:<tag> --format '{{json .Config.Labels}}'                  # Commit und Tag
+```
 
-Vor jedem produktiven Build:
+**Aktualisierung der Abhängigkeiten:** nur gezielt, bei einem Sicherheits- oder
+Funktionsgrund.
 
-1. Den Patch aus der bisherigen Build-Quelle als Diff sichern und gegen den
-   neuen Quellstand anwenden, ohne weitere Änderungen.
-2. Nach dem Build im Image prüfen, dass der Payload `"think": False` enthält,
-   z. B. `grep -n '"think"' /app/system/services/ollama.py` im Container.
-3. `DOCPIPE_BUILD_LOCAL_PATCHES=ollama-think-false` setzen. Das Dashboard zeigt
-   den Build dann als „modifiziert (ollama-think-false)“.
-4. Funktionsprüfung mit einem synthetischen Analyse-Request. Die Antwortzeit
-   darf nicht durch einen „Thinking“-Anteil auffällig steigen.
+1. Den Digest im `Dockerfile` bzw. die betroffene Zeile in `constraints.txt`
+   anpassen.
+2. Neu bauen und `pip freeze` erneut übernehmen.
+3. Die Tests laufen lassen; `tests/test_release_build.py` prüft, dass jede
+   Anforderung exakt und innerhalb ihres Bereichs fixiert ist.
 
-**Ohne nachweislich angewendeten Patch keine produktive Freigabe.**
+Die CI installiert ebenfalls mit `-c constraints.txt`, testet also genau die
+Release-Versionen.
 
-**Vorschlag für eine spätere, getrennte Freigabe (nicht Teil von M7):**
+**Bit-identisch** sind zwei Builds nicht, weil Docker Zeitstempel aufnimmt.
+Identisch sind Paketversionen und Inhalt; lokal mit zwei Builds ohne Cache
+geprüft.
 
-- Neue Option `ollama.think` mit den Werten `null`, `true` oder `false`.
-  `null` lässt das Feld weg; das ist das heutige Verhalten des Repositorys.
-- Optional pro Modellprofil überschreibbar (`models.<profil>.think`).
-- Gesendet wird das Feld nur, wenn ein Wert gesetzt ist.
-- Bestehende Konfigurationen bleiben unverändert gültig; die Produktion setzt
-  `ollama.think: false`.
-- Danach entfällt der lokale Patch.
+### 2.1 Ollama `think` – Konfiguration statt Patch
 
-## 3. Ablauf der späteren Installation
+Das bisherige produktive Image enthielt eine **lokale Quellcode-Anpassung**
+(`"think": False` fest im Payload von `system/services/ollama.py`). Sie entfällt.
+Stattdessen gilt:
 
-Jeder Schritt hat eine Prüfung. Schlägt sie fehl, geht es mit dem
-Rollback (§9) weiter, nicht mit dem nächsten Schritt.
+```yaml
+ollama:
+  think: false     # für die produktive Installation ausdrücklich setzen
+```
 
-| # | Schritt | Prüfung |
-|---|---|---|
-| 1 | **Sichern:** Compose-Datei, `config.yaml`, Runtime-Prompts, Tag bzw. Digest des laufenden Images | Sicherungen lesbar, Prüfsummen notiert |
-| 2 | **Image bauen** (§2) | Build ohne Fehler, Tag eindeutig |
-| 3 | **think-Patch anwenden** und prüfen (§2.1) | Patch im Image nachweisbar |
-| 4 | **Neues Image mit `monitoring.enabled: false`** starten (bisherige Konfiguration, nur Image-Tag geändert) | `GET /api/v1/health` 200, Container healthy |
-| 5 | **HubDix und PDF4Fill prüfen** (synthetische Dokumente) | Siehe §3.1, alles unverändert |
-| 6 | **Datenerfassung aktivieren:** `monitoring.enabled: true`, `web.enabled: false`, Datenvolume (§4) | Datenbank `<data_dir>/monitor.db` entsteht (0600), API-Antworten unverändert, Log ohne Monitoring-Fehler |
-| 7 | **Oberfläche aktivieren:** `monitoring.web.enabled: true`, Benutzer einrichten (§5), Reverse Proxy (§4.3) | Smoke-Test §3.2 |
-| 8 | **Funktion und Ressourcen prüfen** | Datenqualität „vollständig“, CPU/RAM im erwarteten Rahmen (§7) |
+- **Wirkung:** `think: false` sendet `"think": false` bei jeder strukturierten
+  Generierung (Analyse, Prompt Lab, Assistent, jeweils inklusive des einen
+  Reparaturaufrufs). Das entspricht dem Verhalten des bisherigen
+  Produktionsimages.
+- **Warm-up:** Es lädt das Modell nur und erhält das Feld nicht.
+- **Ohne die Option** wird kein `think`-Feld gesendet. Das ist das Verhalten des
+  unveränderten Repositorys, und kein Standardwert ändert sich.
+- **Gültige Werte:** nur `true` und `false`. `"false"` in Anführungszeichen, `0`
+  usw. lassen den Start mit einem Konfigurationsfehler scheitern.
+- **`think: true` bei einem Modell ohne Thinking-Unterstützung** ergibt
+  `ai_processing_failed`, ohne Wiederholung und ohne anderes Modell.
 
-### 3.1 Regression HubDix und PDF4Fill (Schritt 5)
+Details: README, Abschnitt „Ollama think“.
 
-Mit den bestehenden Client-Keys und synthetischen Dokumenten:
+## 3. Release- und Rollback-Checkliste
+
+Für den Betreiber. Jeder Schritt hat Prüfkriterien und eine Rückfallmaßnahme.
+Schlägt eine Prüfung fehl, geht es mit der Rückfallmaßnahme weiter, nicht mit
+dem nächsten Schritt. Konkrete Hosts, Pfade und Zugangsdaten gehören in die
+Betriebsunterlagen, **nicht** in dieses Repository.
+
+| # | Schritt | Prüfkriterien | Rückfall |
+|---|---|---|---|
+| 1 | **Bestehende Installation sichern:** Compose-Datei, `config.yaml`, Runtime-Prompts, Image-Tag und Digest des laufenden Images (`docker image inspect`), ggf. das Monitoring-Datenverzeichnis (§8) | Sicherungen vollständig, lesbar, Prüfsummen notiert; das bisherige Image ist lokal vorhanden und **wird nicht gelöscht** | – (nichts verändert) |
+| 2 | **Aktuellen PDF4Fill-Fill-Workflow** auf der bestehenden Installation mit synthetischen Formularen prüfen (inspect → Ausfüllen → fill), dabei Ergebnisse festhalten | Formulare werden erkannt und korrekt befüllt; die Ergebnisse dienen als Referenz für Schritt 9 | Abweichungen klären, bevor ein neues Image kommt |
+| 3 | **Release-Image** aus einer separaten, sauberen Arbeitskopie bauen (§2) | `git status` leer, Build fehlerfrei, eindeutiger Tag | Image verwerfen; die laufende Installation ist unberührt |
+| 4 | **Client-Konfiguration und Zugangsdaten** unverändert übernehmen (gesicherte `config.yaml`) | `clients:` byte-gleich zur Sicherung (`diff`); keine neuen oder geänderten Keys | gesicherte `config.yaml` |
+| 5 | **`ollama.think: false`** in `config.yaml` setzen, sonst nichts ändern | `diff` zur Sicherung zeigt nur diese Zeile (plus ggf. den `monitoring`-Block mit `enabled: false`); Startvalidierung ohne Fehler | gesicherte `config.yaml` |
+| 6 | **Build-Metadaten und Paketversionen** dokumentieren: Commit, Tag, Image-Digest, `pip freeze` (§2) | `pip freeze` = `constraints.txt`, `pip check` ohne Befund; Labels mit Commit und Tag | Build wiederholen |
+| 7 | **Rollback vorbereiten:** bisheriges Image (Tag und Digest) und Compose-Backup verifizieren | `docker image inspect <bisheriges Image>` erfolgreich; die gesicherte Compose-Datei startet syntaktisch (`docker compose config`) | – |
+| 8 | **Neues Image ohne Monitoring** starten: nur Image-Tag ändern, `monitoring.enabled: false` bzw. kein `monitoring`-Block | Container healthy, `GET /api/v1/health` 200; Log ohne Fehler; keine Monitoring-Dateien, kein `/monitor` (404) | bisheriges Image und Compose-Datei, Neustart |
+| 9 | **HubDix und PDF4Fill prüfen** (§3.1) | alle Prüfungen wie in Schritt 2 bzw. §3.1; Analyse-Antwortzeiten ohne auffälligen Anstieg (kein „Thinking“-Anteil) | wie Schritt 8 |
+| 10 | **Datenerfassung** aktivieren: `monitoring.enabled: true`, `web.enabled: false`, persistentes Datenverzeichnis (§4.1) | `monitor.db` entsteht mit 0600; API-Antworten unverändert (Stichprobe wie Schritt 9); Log ohne Monitoring-Fehler | `monitoring.enabled: false`, Neustart; Datenverzeichnis bleibt liegen |
+| 11 | **Ressourcenverbrauch** nach Aktivierung prüfen (z. B. `docker stats` über einige Stunden normalen Betriebs) | RSS pro Worker etwa +4 MiB; CPU im Leerlauf ohne erkennbaren Anstieg; Datenbankgröße im erwarteten Rahmen (§6) | wie Schritt 10 |
+| 12 | **Geschützte Oberfläche** aktivieren: Benutzer per CLI (§5), `web.enabled: true`, `access_mode: allowlist`, `allowed_networks`, `trusted_proxies`, `require_https: true`, Reverse Proxy mit HTTPS (§4.3) | Startvalidierung ohne Fehler; Oberfläche nicht gesperrt | `monitoring.web.enabled: false`, Neustart; keine Löschung von Sessions oder Audit |
+| 13 | **Funktions- und Sicherheitsprüfung** (§3.2) | Smoke-Test vollständig bestanden; Übersicht zeigt Commit und Tag des Release-Builds, Datenqualität „vollständig“ | wie Schritt 12 |
+| 14 | **Ressourcen unter realen Betriebsbedingungen** erneut messen (über mindestens einen typischen Betriebstag) und mit den lokalen Referenzwerten vergleichen | Abweichungen dokumentiert und bewertet | bei Bedarf Schritt 12 bzw. 10 zurücknehmen |
+
+**Vollständiger Rollback** (jederzeit): Bisheriges Image eintragen, gesicherte
+Compose-Datei und `config.yaml` zurück, Neustart. Das alte Image kennt
+`ollama.think` und `monitoring` nicht und ignoriert beides; mit der gesicherten
+Konfiguration ist der Ausgangszustand wiederhergestellt. Das
+Monitoring-Datenverzeichnis bleibt unangetastet (§9).
+
+### 3.1 Regression HubDix und PDF4Fill (Schritte 2 und 9)
+
+Mit den bestehenden Client-Keys und **synthetischen** Dokumenten:
 
 - **HubDix:**
   - `extract-text`;
@@ -97,18 +134,18 @@ Mit den bestehenden Client-Keys und synthetischen Dokumenten:
   - `assistant/query`;
   - Warm-up.
 - **PDF4Fill:**
-  - `forms/inspect`, `forms/detect`, `forms/fill`;
-  - OCR-Fallback;
-  - ein PDF mit Feldnamen, die nicht gültiges UTF-8 sind.
+  - `forms/inspect` mit Erkennung und OCR;
+  - `forms/fill`;
+  - ein PDF mit Feldnamen, die nicht gültiges UTF-8 sind;
+  - Bearer-Authentifizierung.
 - **Allgemein:**
   - Ein gesperrter bzw. unbekannter Key ergibt 401/403.
   - Deaktivierte Dienste bleiben deaktiviert.
 
 **Hinweis:** Der vollständige PDF4Fill-Workflow auf dem Produktionssystem ist
-bisher **nicht verifiziert**. Er muss vor der Freigabe mit dem PDF4Fill-Betreiber
-und synthetischen Formularen durchgeführt werden.
+bisher **nicht verifiziert** (Schritt 2).
 
-### 3.2 Smoke-Test der Oberfläche (Schritt 7)
+### 3.2 Smoke-Test der Oberfläche (Schritt 13)
 
 - **Zugang:**
   - `/monitor` von außerhalb der Allowlist ergibt 403.
@@ -118,7 +155,7 @@ und synthetischen Formularen durchgeführt werden.
   - Login nur mit Passwort und TOTP.
   - Derselbe TOTP-Code wird kein zweites Mal akzeptiert.
   - Logout beendet die Session.
-- **Anzeige:** Die Übersicht zeigt den Build mit `ollama-think-false`.
+- **Anzeige:** Die Übersicht zeigt Commit und Image-Tag des Release-Builds und den Build-Status „unverändert“ (keine lokalen Patches mehr).
 
 ## 4. Konfiguration
 
@@ -162,14 +199,14 @@ und synthetischen Formularen durchgeführt werden.
 - **Proxy-Logs:** Der Proxy darf `/monitor`-Bodies nicht protokollieren
   (Login-Formulare).
 
-### 4.4 Minimalbeispiel (Schritt 6, dann 7)
+### 4.4 Minimalbeispiel (Schritt 10, dann 12)
 
 ```yaml
 monitoring:
   enabled: true
   data_dir: <data_dir>
   web:
-    enabled: false            # Schritt 7: true
+    enabled: false            # Schritt 12: true
     access_mode: allowlist
     allowed_networks: ["<vpn-netz>/<präfix>"]
     trusted_proxies: ["<proxy-adresse>/32"]
@@ -239,7 +276,7 @@ docker compose exec -it <service> python -m system.tools.monitor_user --file <us
 
 Ressourcenbedarf: Messungen in einer lokalen, synthetischen Umgebung stehen in
 [monitoring-dashboard.md §17](../architecture/monitoring-dashboard.md). Das sind
-**keine** Produktionsmessungen; nach Schritt 8 auf dem Zielsystem
+**keine** Produktionsmessungen; in den Schritten 11 und 14 auf dem Zielsystem
 nachzumessen.
 
 ## 8. Backup und Wiederherstellung
