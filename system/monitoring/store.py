@@ -21,6 +21,7 @@ from pathlib import Path
 
 from system.monitoring.recorder import Batch, QualityCounters, minute_of
 from system.monitoring.settings import MIB, MonitoringSettings
+from system.monitoring.sqlite_util import enable_wal
 from system.monitoring.stats import (
     BUCKET_COLUMNS,
     BUCKET_COUNT,
@@ -313,7 +314,7 @@ class MonitoringStore:
                 os.chmod(self.path, 0o600)
             if is_new:
                 conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
-            conn.execute("PRAGMA journal_mode = WAL")
+            enable_wal(conn, BUSY_TIMEOUT_SECONDS)
             conn.execute("PRAGMA synchronous = NORMAL")
             conn.execute("PRAGMA temp_store = MEMORY")
             conn.execute("PRAGMA cache_size = -4096")
@@ -812,7 +813,9 @@ class MonitoringStore:
                 (excess,),
             )
             deleted["events"] = deleted.get("events", 0) + cur.rowcount
-        conn.execute("PRAGMA incremental_vacuum(4096)")
+        # A PRAGMA that returns rows only works while it is stepped: without fetchall()
+        # SQLite frees exactly one page (Phase M7 finding: the file never shrank).
+        conn.execute("PRAGMA incremental_vacuum(4096)").fetchall()
         return deleted
 
     def prune_oldest(self, fraction: float = 0.1) -> int:
@@ -834,7 +837,7 @@ class MonitoringStore:
                     (limit,),
                 )
                 removed += cur.rowcount
-        conn.execute("PRAGMA incremental_vacuum(16384)")
+        conn.execute("PRAGMA incremental_vacuum(16384)").fetchall()  # stepped, see apply_retention
         return removed
 
     # --- queries -----------------------------------------------------------------

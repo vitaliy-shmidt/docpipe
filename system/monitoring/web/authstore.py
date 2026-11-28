@@ -31,6 +31,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from system.monitoring.sqlite_util import enable_wal
+
 SCHEMA_VERSION = 1
 AUTH_DB_FILENAME = "monitor-auth.db"
 BUSY_TIMEOUT_SECONDS = 5.0
@@ -129,7 +131,7 @@ class AuthStore:
         try:
             if os.name == "posix":
                 os.chmod(self.path, 0o600)
-            conn.execute("PRAGMA journal_mode = WAL")
+            enable_wal(conn, BUSY_TIMEOUT_SECONDS)
             conn.execute("PRAGMA synchronous = FULL")
             conn.execute("PRAGMA temp_store = MEMORY")
             page_size = conn.execute("PRAGMA page_size").fetchone()[0]
@@ -163,6 +165,12 @@ class AuthStore:
         for target in range(version + 1, SCHEMA_VERSION + 1):
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Several workers start at once: another one may have migrated
+                # while this one waited for the write lock (found in the M7 load
+                # test with 4 Uvicorn workers on a fresh data directory).
+                if conn.execute("PRAGMA user_version").fetchone()[0] >= target:
+                    conn.execute("COMMIT")
+                    continue
                 for statement in MIGRATIONS[target]:
                     conn.execute(statement)
                 conn.execute(f"PRAGMA user_version = {target}")

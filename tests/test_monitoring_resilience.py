@@ -304,3 +304,42 @@ def test_maintenance_applies_retention_and_storage_pressure(tmp_path, monkeypatc
     codes = [r[0] for r in db_rows(mon.store.path, "SELECT code FROM events")]
     mon.store.close()
     assert remaining < 50 and "storage_pressure" in codes
+
+
+def test_storage_limit_is_left_again_after_real_pruning(tmp_path):
+    """Phase M7 load test finding: pruning deleted rows but the file never shrank
+    (PRAGMA incremental_vacuum was not stepped), so a store that once reached
+    storage.max_bytes blocked all telemetry writes for good. Checked here with real
+    file sizes, no mocks: above the limit writes pause visibly, maintenance prunes,
+    the file shrinks below the limit and writes resume."""
+    from system.monitoring.recorder import Batch
+    from system.monitoring.settings import MIB
+
+    clock = Clock()
+    limit = 16 * MIB
+    # The store caps its own page count at max_bytes, so the realistic way above the
+    # limit is a limit lowered later: fill with the default limit, then reopen.
+    filler = make_monitor(tmp_path, clock)
+    filler._open_store()
+    i = 0
+    while filler.store.file_bytes() < limit * 1.1:
+        batch = [finished(clock.now - 3_600_000 - n, f"fill-{i + n}") for n in range(4000)]
+        i += len(batch)
+        filler.store.write_batch(filler.instance_id, Batch(batch, [], {}), clock.now, [])
+        filler.store.checkpoint()
+    filler.store.close()
+    mon = make_monitor(tmp_path, clock, storage=StorageSettings(max_bytes=limit, min_free_disk_bytes=0))
+    mon._open_store()
+    assert mon.store.file_bytes() >= limit
+    mon.recorder.finish(finished(clock.now, "blocked"))
+    assert mon.flush_now() == 0 and mon._writes_blocked == "size"  # visible pause, nothing written
+    for _ in range(10):
+        mon.maintenance_now()
+        if mon.store.file_bytes() < limit * monitor_module.PRESSURE_RATIO:
+            break
+    assert mon.store.file_bytes() < limit  # the file really shrank
+    mon.recorder.finish(finished(clock.now, "after"))
+    assert mon.flush_now() >= 1 and mon._writes_blocked is None  # writes resume
+    codes = {r[0] for r in db_rows(mon.store.path, "SELECT code FROM events")}
+    mon.store.close()
+    assert {"storage_limit_reached", "storage_pressure"} <= codes

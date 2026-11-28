@@ -260,3 +260,37 @@ def test_shell_csrf_token_is_bound_to_the_session(
         token = client.cookies.get(SESSION_COOKIE)
         csrf = csrf_of(client.get("/monitor"))
     assert csrf != token and token not in csrf and len(csrf) == 64
+
+
+def test_concurrently_starting_workers_open_a_fresh_auth_database(tmp_path):
+    """Phase M7 load test finding: with several Uvicorn workers starting at once on an
+    empty data directory, one worker failed with "table meta already exists" (the
+    migration did not re-check the version after taking the write lock) and locked
+    its interface. Every worker must open the store and share one subject key."""
+    import threading
+
+    from system.monitoring.web.authstore import AUTH_DB_FILENAME, AuthStore
+
+    path = tmp_path / AUTH_DB_FILENAME
+    barrier, stores, errors = threading.Barrier(8), [], []
+
+    def worker():
+        store = AuthStore(path, 64 * 1024 * 1024)
+        try:
+            barrier.wait(5)
+            store.open()
+            stores.append(store)
+        except Exception as exc:  # reported below
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(30)
+    try:
+        assert errors == [] and len(stores) == 8
+        assert len({s._subject_key for s in stores}) == 1
+    finally:
+        for s in stores:
+            s.close()

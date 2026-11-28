@@ -193,3 +193,32 @@ def test_auth_database_is_not_touched(tmp_path):
     assert not auth.exists()
     reopen(tmp_path).close()
     assert not auth.exists()  # the telemetry migration never creates or opens the auth database
+
+
+def test_concurrent_workers_create_a_fresh_database(tmp_path):
+    """Phase M7 load test finding: several workers opening a new data directory at
+    once got "database is locked" from the WAL switch; that worker then ran without
+    telemetry. All of them must open the store."""
+    barrier, errors, stores = threading.Barrier(8), [], []
+
+    def worker():
+        store = MonitoringStore(MonitoringSettings(enabled=True, data_dir=tmp_path / "fresh"))
+        try:
+            barrier.wait(5)
+            store.open()
+            stores.append(store)
+        except Exception as exc:  # reported below
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(30)
+    try:
+        assert errors == [] and len(stores) == 8
+        assert all(s.schema_version() == 3 for s in stores)
+        assert stores[0]._db().execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        for s in stores:
+            s.close()
