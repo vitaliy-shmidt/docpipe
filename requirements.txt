@@ -8,3 +8,5 @@ pikepdf>=10.0,<11.0
 pdfminer.six>=20250506
 reportlab>=4.0,<6.0
 Pillow>=10.0,<14.0
+argon2-cffi>=23.1,<26.0
+jinja2>=3.1,<4.0

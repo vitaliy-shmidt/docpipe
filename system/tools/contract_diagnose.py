@@ -375,7 +375,9 @@ def _registry(settings) -> PromptRegistry:
 def _client(settings):
     from system.services.ollama import OllamaClient
 
-    return OllamaClient(settings.ollama.base_url, keep_alive=settings.ollama.keep_alive)
+    return OllamaClient(
+        settings.ollama.base_url, keep_alive=settings.ollama.keep_alive, think=settings.ollama.think
+    )
 
 
 def _read_text(source: str) -> str:

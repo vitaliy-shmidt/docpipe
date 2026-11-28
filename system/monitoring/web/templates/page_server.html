@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+{% block heading %}{{ t.nav_server }}{% endblock %}
+{% block filters %}{% with show=(), ranges=("live", "1h", "24h", "7d", "30d", "custom"), default_range="1h" %}{% include "_filters.html" %}{% endwith %}{% endblock %}
+{% block content %}
+<section class="row g-3 mb-3" id="sv-health" aria-label="{{ t.health }}"></section>
+<section class="row g-3 mb-3" id="sv-latest"></section>
+<div class="row g-3">
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("cpu") }}<h2 class="h6 mb-0">{{ t.cpu }}</h2>
+      <span class="ms-auto dpm-meta" data-meta="range"></span></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="sv-cpu" role="img" aria-label="{{ t.cpu }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("hdd-stack") }}<h2 class="h6 mb-0">{{ t.memory }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="sv-mem" role="img" aria-label="{{ t.memory }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("activity") }}<h2 class="h6 mb-0">{{ t.network_rx }} / {{ t.network_tx }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="sv-net" role="img" aria-label="{{ t.network_rx }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("hdd-stack") }}<h2 class="h6 mb-0">{{ t.disk_free }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="sv-disk" role="img" aria-label="{{ t.disk_free }}"></canvas></div></div></section>
+  </div>
+</div>
+{% endblock %}

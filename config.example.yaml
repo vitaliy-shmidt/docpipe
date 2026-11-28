@@ -44,6 +44,14 @@ ollama:
   # genuinely idle periods. Re-evaluate under real RAM/swap pressure (see
   # docs/staging-deployment.md "RAM awareness") before raising it further.
   keep_alive: "15m"
+  # Ollama's `think` field for models with a reasoning phase (README "Ollama
+  # think"). Omit it to send no `think` field at all (behaviour of earlier
+  # versions). false: answer without a reasoning phase - recommended for
+  # structured extraction with thinking-capable models; true: only for models
+  # and Ollama versions that support it (otherwise ai_processing_failed, no
+  # retry, no other model). Only true/false are valid. Sent on analyze, Prompt
+  # Lab and assistant generations, never on the warm-up.
+  think: false
 
 # Optional (V2.2) - see docs/prompt-lab.md. Omit this whole block entirely
 # for the defaults shown here. base_dir is the repo-shipped prompts
@@ -145,6 +153,83 @@ forms:
   max_ocr_pages: 20
   # Phase 2.2: forms/fill uses max_pages/max_fields too (manifest entries); its other
   # limits are fixed (manifest 1 MiB, 10 PNG images of 5 MiB / 25 megapixels).
+
+# Operator monitoring (Phase M2 foundation, docs/architecture/monitoring-dashboard.md).
+# Disabled by default: without `enabled: true` there is no database, no file,
+# no thread, no upstream probe and no route. M2 only collects data - there is
+# no dashboard and no monitoring endpoint yet (M3/M4). Every value below is
+# optional; shown are the defaults.
+monitoring:
+  enabled: false
+  # SQLite database directory - mount a persistent volume writable by the
+  # container user (UID 1000) here; created with 0700, the database with 0600.
+  data_dir: monitoring-data
+  flush_interval_seconds: 5          # 1-30; batch write of buffered request records
+  system_sample_interval_seconds: 15 # /proc + cgroup v2 readers, no privileges
+  probe_interval_seconds: 30         # GET-only status probes (see `probes`)
+  maintenance_interval_seconds: 60   # retention, WAL checkpoint, storage pressure
+  buffer_max_requests: 10000         # in-memory bound; overflow is dropped AND counted
+  buffer_max_events: 1000
+  max_steps_per_request: 64
+  retention:
+    raw_days: 7                # per-request rows and processing steps
+    minute_rollup_days: 14
+    hour_rollup_days: 400
+    system_raw_hours: 48
+    system_minute_days: 30
+    probe_days: 30
+    event_days: 30
+    data_quality_days: 30
+    max_event_rows: 100000
+  storage:
+    max_bytes: 536870912           # 512 MiB for database + -wal + -shm together
+    min_free_disk_bytes: 268435456 # writes pause below 256 MiB free on the volume
+  probes:
+    # Ollama: GET /api/version, /api/tags, /api/ps - never a generation or
+    # model load. Stirling: GET /api/v1/info/status - never a PDF operation.
+    # URLs are ollama.base_url / stirling.base_url above; nothing else.
+    ollama: true
+    stirling: true
+    timeout_seconds: 3   # total deadline per probe request (connect + all reads)
+  # Operator web interface (Phase M3) at /monitor - separately enabled and only
+  # together with `enabled: true` above. Startup fails on an unsafe or
+  # incomplete configuration; a missing/invalid users file or auth database
+  # locks the interface (503) without affecting DocPipe's API.
+  # Requires Uvicorn to run with --no-proxy-headers (as in the Dockerfile).
+  # See docs/architecture/monitoring-dashboard.md "Betrieb der Weboberfläche".
+  web:
+    enabled: false
+    access_mode: allowlist          # allowlist (VPN / IP allowlist) | public_mfa (explicit)
+    allowed_networks: []            # required and non-empty in allowlist mode, e.g. ["10.8.0.0/24", "fd00:8::/64"]
+    trusted_proxies: []             # reverse proxies whose X-Forwarded-For/-Proto are used, e.g. ["127.0.0.1/32"]
+    require_https: true             # false only for loopback-only development
+    # public_origin: https://monitor.example.org   # exact Origin for CSRF checks (optional)
+    users_file: monitoring-users.yaml   # created with: python -m system.tools.monitor_user add <name>; 0600
+    session_idle_minutes: 15        # 5-60; dashboard polling never extends it
+    session_absolute_hours: 8       # 1-12
+    mfa_pending_seconds: 300        # password accepted, waiting for the TOTP code
+    max_sessions_per_user: 3
+    totp_window_steps: 1            # accepted clock drift in 30 s steps (0 or 1)
+    audit_days: 90
+    max_audit_rows: 100000
+    auth_db_max_bytes: 67108864     # separate security database <data_dir>/monitor-auth.db
+    poll_activity_seconds: 5        # dashboard refresh of Live Activity (2-60)
+    poll_overview_seconds: 15       # Overview/Server refresh (5-300); other pages max(30, this)
+    api_requests_per_minute: 240    # data API cap per session (30-2000), beyond: 429
+    login:
+      ip_max_failures: 10           # per client IP within window_minutes, then locked
+      user_max_failures: 5          # per username (from any IP) within window_minutes, then locked
+      window_minutes: 15
+      lockout_minutes: 15
+      mfa_max_attempts: 5           # per password step
+      argon2_max_concurrency: 2     # Argon2id checks at the same time (per process)
+      argon2_per_minute: 30         # Argon2id checks per minute (per process); beyond: uniform failure
+      max_request_bytes: 4096
+# Build information (optional, environment variables of the container - never
+# guessed): DOCPIPE_BUILD_COMMIT, DOCPIPE_IMAGE_TAG, DOCPIPE_BUILD_LOCAL_CHANGES
+# (true/false; unset = unknown), DOCPIPE_BUILD_LOCAL_PATCHES (e.g.
+# "ollama-think-false"). An image with local patches is reported as
+# "modified", never as the unmodified commit.
 
 clients:
   demo-client:

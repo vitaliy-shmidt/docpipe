@@ -7,6 +7,9 @@ config.yaml
 # instead - see docker-compose.yml and docs/prompt-lab.md)
 runtime-prompts/
 
+# Operator monitoring (Phase M2) - local SQLite telemetry, never committed
+monitoring-data/
+
 # VS Code multi-root workspace (local dev convenience only)
 docpipe.code-workspace
 

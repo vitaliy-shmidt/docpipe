@@ -1,0 +1,31 @@
+{% extends "layout.html" %}
+{% block heading %}{{ t.nav_performance }}{% endblock %}
+{% block filters %}{% with show=("client", "service"), ranges=("1h", "24h", "7d", "30d", "custom"), default_range="24h" %}{% include "_filters.html" %}{% endwith %}{% endblock %}
+{% block content %}
+<div class="alert alert-secondary small d-flex gap-2" role="note">{{ icon("info-circle") }}<span>{{ t.nested_hint }}</span></div>
+<div class="dpm-empty card card-body text-center d-none" id="pf-empty">
+  <p class="mb-1 fw-semibold">{{ t.no_data }}</p><p class="text-body-secondary small mb-0">{{ t.no_data_hint }}</p>
+</div>
+<section class="row g-3 mb-3" id="pf-request"></section>
+<div class="row g-3 mb-3">
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("graph-up") }}
+      <h2 class="h6 mb-0">{{ t.p95 }} / {{ t.avg }} – {{ t.steps }}</h2><span class="ms-auto dpm-meta" data-meta="range"></span></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="pf-steps" role="img" aria-label="{{ t.steps }}"></canvas></div></div></section>
+  </div>
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon("clock") }}
+      <h2 class="h6 mb-0">{{ t.step_durations }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="pf-series" role="img" aria-label="{{ t.step_durations }}"></canvas></div></div></section>
+  </div>
+</div>
+<section class="card mb-3"><div class="card-header dpm-card-header">{{ icon("journal-text") }}<h2 class="h6 mb-0">{{ t.steps }}</h2></div>
+  <div class="card-body p-0"><div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.step }}</th><th scope="col" class="text-end">{{ t.measurements }}</th>
+      <th scope="col" class="text-end">{{ t.avg }}</th><th scope="col" class="text-end">{{ t.median }}</th>
+      <th scope="col" class="text-end">{{ t.p95 }}</th><th scope="col" class="text-end">{{ t.p99 }}</th>
+      <th scope="col" class="text-end">{{ t.min }}</th><th scope="col" class="text-end">{{ t.max }}</th>
+      <th scope="col" class="text-end">{{ t.failure_rate_tech }}</th><th scope="col">{{ t.ollama_reported }}</th></tr></thead>
+    <tbody id="pf-table"></tbody></table></div></div></section>
+<section class="card"><div class="card-body" id="pf-quality"></div></section>
+{% endblock %}

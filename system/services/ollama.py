@@ -39,6 +39,18 @@ makes - the single OllamaClient instance is shared by both
 /documents/analyze and /assistant/query (system/main.py), so there is no
 route that can drift out of sync with another (task §8 Single Source of
 Truth).
+
+Ollama `think` (config `ollama.think`): when configured, the boolean is sent
+as the `think` field of every generation request - the primary call and the
+single repair call of `generate_structured`. It is not sent with `warm_up`,
+which only loads the model (empty prompt, nothing is generated), so a
+thinking setting can never make a warm-up fail. Not configured (None): the
+field is omitted, exactly as in every earlier version. Only `response` is
+read; a `thinking` text that Ollama may return with `think: true` is never
+used, stored or logged. An Ollama version that does not know the field
+ignores it; a model without thinking support may answer `think: true` with
+an HTTP error, which maps to `ai_processing_failed` like any other non-200
+answer - without a retry and without switching models.
 """
 
 from __future__ import annotations
@@ -76,9 +88,10 @@ def _bounded_timeout(timeout_seconds: float, deadline: float | None) -> float:
 
 
 class OllamaClient:
-    def __init__(self, base_url: str, keep_alive: str | None = None) -> None:
+    def __init__(self, base_url: str, keep_alive: str | None = None, think: bool | None = None) -> None:
         self._base_url = base_url
         self._keep_alive = keep_alive
+        self._think = think
         self._client = httpx.Client(follow_redirects=False)
 
     def close(self) -> None:
@@ -165,6 +178,8 @@ class OllamaClient:
         }
         if self._keep_alive:
             payload["keep_alive"] = self._keep_alive
+        if self._think is not None:
+            payload["think"] = self._think
         started_at = time.monotonic()
         try:
             response = self._client.post(url, json=payload, timeout=timeout_seconds)

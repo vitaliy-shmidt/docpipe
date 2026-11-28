@@ -1,0 +1,51 @@
+# Exact versions of every Python package in the DocPipe image (release lock).
+# Generated with `pip freeze` from the image built from requirements.txt on
+# 2026-11-28 (base python:3.12.16-slim, Python 3.12.16). The Dockerfile installs
+# `-r requirements.txt -c constraints.txt`: requirements.txt keeps the declared
+# ranges, this file fixes what is actually installed, so a rebuild of the same
+# commit installs the same versions. Update deliberately (security fix or a needed
+# feature), never as a side effect - see docs/operations/monitoring-operations.md §2.
+# pip itself comes from the pinned base image (25.0.1).
+annotated-doc==0.0.7
+annotated-types==0.8.0
+anyio==4.16.0
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.2.0
+attrs==26.1.0
+certifi==2026.11.20
+cffi==2.1.1
+charset-normalizer==3.5.3
+click==8.5.1
+cryptography==50.0.2
+fastapi==0.165.0
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.9.0
+httpx==0.29.0
+idna==3.20
+Jinja2==3.1.6
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+lxml==6.2.0
+MarkupSafe==3.0.4
+opentelemetry-api==1.45.2
+packaging==26.4
+pdfminer.six==20260107
+pikepdf==10.18.3
+pillow==13.0.0
+pycparser==3.12
+pydantic==2.14.4
+pydantic_core==2.50.5
+python-dotenv==1.2.4
+python-multipart==0.0.34
+PyYAML==6.0.4
+referencing==0.37.0
+reportlab==5.1.2
+rpds-py==2026.9.1
+starlette==1.10.0
+typing-inspection==0.4.5
+typing_extensions==4.16.0
+uvicorn==0.55.0
+uvloop==0.23.0
+watchfiles==1.3.0
+websockets==17.4

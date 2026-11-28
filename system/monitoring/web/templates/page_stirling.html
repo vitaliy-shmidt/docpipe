@@ -1,0 +1,47 @@
+{% extends "layout.html" %}
+{% block heading %}{{ t.nav_stirling }}{% endblock %}
+{% block filters %}{% with show=("client", "operation", "status"), operations=stirling_operations, statuses=("success", "failed"), ranges=("1h", "24h", "7d", "30d", "custom"), default_range="24h" %}{% include "_filters.html" %}{% endwith %}{% endblock %}
+{% block content %}
+<div class="alert alert-secondary small d-flex gap-2" role="note">{{ icon("info-circle") }}<span>{{ t.stirling_scope }}</span></div>
+
+<section class="row g-3 mb-3" id="st-state" aria-label="{{ t.health }}"></section>
+
+<h2 class="h5 mt-4 mb-3">{{ t.stirling_ops }} <span class="dpm-meta fw-normal fs-6" data-meta="range"></span></h2>
+<div class="dpm-empty card card-body text-center d-none mb-3" id="st-empty">
+  <p class="mb-1 fw-semibold">{{ t.no_data }}</p><p class="text-body-secondary small mb-0">{{ t.no_data_hint }}</p>
+</div>
+<section class="row g-3 mb-3" id="st-kpis" aria-label="{{ t.stirling_ops }}"></section>
+
+<section class="card mb-3" aria-labelledby="st-ops-title">
+  <div class="card-header dpm-card-header">{{ icon("journal-text") }}<h2 class="h6 mb-0" id="st-ops-title">{{ t.ops_by_type }}</h2></div>
+  <div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.operation }}</th><th scope="col" class="text-end">{{ t.count }}</th>
+      <th scope="col" class="text-end">{{ t.successful }}</th><th scope="col" class="text-end">{{ t.failed }}</th>
+      <th scope="col" class="text-end">{{ t.failure_rate }}</th><th scope="col" class="text-end">{{ t.avg }}</th>
+      <th scope="col" class="text-end">{{ t.median }}</th><th scope="col" class="text-end">{{ t.p95 }}</th>
+      <th scope="col" class="text-end">{{ t.p99 }}</th><th scope="col" class="text-end">{{ t.min }} / {{ t.max }}</th>
+      <th scope="col">{{ t.outcome }}</th></tr></thead>
+    <tbody id="st-ops"></tbody></table></div>
+</section>
+
+<div class="row g-3 mb-3">
+  {% for id, ic, title in (("st-series", "graph-up", t.pdf_over_time), ("st-types", "file-earmark-pdf", t.ops_by_type),
+      ("st-latency", "clock", t.latency_by_op), ("st-ocr", "hourglass-split", t.ocr_durations),
+      ("st-errors", "exclamation-triangle", t.errors_over_time), ("st-clients", "people", t.client_usage),
+      ("st-routes", "list", t.by_route), ("st-probes", "activity", t.probe_history)) %}
+  <div class="col-12 col-xl-6">
+    <section class="card h-100"><div class="card-header dpm-card-header">{{ icon(ic) }}<h2 class="h6 mb-0">{{ title }}</h2></div>
+      <div class="card-body"><div class="dpm-chart"><canvas id="{{ id }}" role="img" aria-label="{{ title }}"></canvas></div>
+        <p class="small text-body-secondary mb-0 mt-2 d-none" id="{{ id }}-note"></p>
+        {% if id == "st-probes" %}<div class="d-flex flex-wrap gap-1 mt-2" id="st-probe-failures"></div>{% endif %}</div></section>
+  </div>
+  {% endfor %}
+</div>
+
+<section class="card mb-3"><div class="card-header dpm-card-header">{{ icon("clock") }}<h2 class="h6 mb-0">{{ t.recent_probes }}</h2></div>
+  <div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.time }}</th><th scope="col">{{ t.filter_status }}</th><th scope="col" class="text-end">{{ t.probe_latency }}</th>
+      <th scope="col">{{ t.version }}</th></tr></thead>
+    <tbody id="st-recent"></tbody></table></div></section>
+<section class="card"><div class="card-body" id="st-quality"></div></section>
+{% endblock %}

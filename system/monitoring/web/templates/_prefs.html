@@ -1,0 +1,11 @@
+<div class="dpm-prefs d-flex align-items-center gap-2">
+  <div class="btn-group btn-group-sm" role="group" aria-label="{{ t.theme }}">
+    <button type="button" class="btn btn-outline-secondary" data-theme-choice="light" title="{{ t.theme_light }}" aria-label="{{ t.theme_light }}">{{ icon("sun") }}</button>
+    <button type="button" class="btn btn-outline-secondary" data-theme-choice="dark" title="{{ t.theme_dark }}" aria-label="{{ t.theme_dark }}">{{ icon("moon-stars") }}</button>
+    <button type="button" class="btn btn-outline-secondary" data-theme-choice="auto" title="{{ t.theme_auto }}" aria-label="{{ t.theme_auto }}">{{ icon("circle-half") }}</button>
+  </div>
+  <div class="btn-group btn-group-sm" role="group" aria-label="{{ t.language }}">
+    <button type="button" class="btn btn-outline-secondary{% if lang == 'de' %} active{% endif %}" data-lang-choice="de" lang="de">DE</button>
+    <button type="button" class="btn btn-outline-secondary{% if lang == 'en' %} active{% endif %}" data-lang-choice="en" lang="en">EN</button>
+  </div>
+</div>

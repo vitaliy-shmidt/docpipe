@@ -173,7 +173,7 @@ cp config.example.yaml config.yaml
 # (only if you use AI analysis) set ollama.base_url and define at least
 # the model profiles your active modes default to - see "Model profiles" below
 
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt   # exact release versions
 uvicorn system.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -188,6 +188,21 @@ docker compose up --build
 Stirling and Ollama don't have to run in the same Compose stack — point
 `stirling.base_url`/`ollama.base_url` (or `STIRLING_URL`/`OLLAMA_URL`) at
 any existing instances instead; Compose here is convenience only.
+
+**Release images** are reproducible:
+
+- the `Dockerfile` pins the Python base image by digest;
+- `constraints.txt` fixes every installed package version (`requirements.txt`
+  keeps the declared ranges);
+- build metadata is passed as build arguments:
+
+```bash
+docker build --build-arg DOCPIPE_BUILD_COMMIT="$(git rev-parse HEAD)"   --build-arg DOCPIPE_IMAGE_TAG="<version>-$(git rev-parse --short HEAD)"   --build-arg DOCPIPE_BUILD_LOCAL_CHANGES=false -t docpipe:<version>-<commit> .
+```
+
+No source patches are needed for a production build. Ollama's `think`
+setting is configuration (`ollama.think`, see "Ollama think"). Release
+checklist: [docs/operations/monitoring-operations.md](docs/operations/monitoring-operations.md).
 
 ### Try it
 
@@ -307,6 +322,8 @@ ollama:                    # optional - only needed if any client has services.a
   keep_alive: "15m"         # optional - how long Ollama keeps a model resident after last use;
                              # defaults to "5m" if omitted. Sent identically on every /api/generate
                              # call (analyze AND assistant) - see "Ollama Keep-Alive" below.
+  think: false              # optional - Ollama's `think` field (true/false). Omitted: the field is
+                             # not sent at all (behaviour of earlier versions). See "Ollama think".
 
 models:                    # named resource/quality classes - see "Model profiles" below
   light:
@@ -418,6 +435,47 @@ any active model-preload/warm-keeper cron — `keep_alive` only changes
 *when Ollama's own existing eviction runs*, it does not prevent eviction
 after real inactivity (see `docs/staging-deployment.md` "Ollama
 Keep-Alive" for the acceptance test and RAM guidance).
+
+### Ollama think
+
+`ollama.think` sets Ollama's `think` request field for models that can
+reason before answering ("thinking" models):
+
+| Config | Sent to Ollama |
+|---|---|
+| omitted (or `null`) | no `think` field at all - byte-identical to every earlier DocPipe version |
+| `think: false` | `"think": false` - the model answers without a reasoning phase |
+| `think: true` | `"think": true` - only for models (and Ollama versions) that support it |
+
+Only real YAML booleans are accepted; `"false"` in quotes, `0` or `no`-like
+strings fail the config validation at startup instead of silently changing
+model behaviour.
+
+**Where it applies:**
+
+- It is sent on every structured generation request: the primary call and
+  the single repair call of `/documents/analyze`, `/lab/analyze` and
+  `/assistant/query`, all through the one shared `OllamaClient`.
+- It is **not** sent with `/documents/warmup`, which only loads the model
+  with an empty prompt and generates nothing.
+- DocPipe reads only Ollama's `response`. A separate `thinking` text that
+  Ollama may return is never used, stored, logged or recorded by the
+  monitoring.
+
+**Older Ollama versions and models without thinking support:**
+
+- An Ollama version without the field ignores it (JSON decoding of unknown
+  fields).
+- A model without thinking support may reject `think: true` with an HTTP
+  error. DocPipe then answers `ai_processing_failed`, exactly like any other
+  non-200 answer from Ollama: no silent retry and no fallback to another
+  model.
+- `think: false` is the safe production value for thinking-capable
+  instruct models used for structured extraction.
+
+This option replaces the earlier manual source patch (`"think": False`
+hard-coded in `system/services/ollama.py`) of some installations: set
+`ollama.think: false` instead and build from the unmodified repository.
 
 ## API
 
@@ -1059,13 +1117,50 @@ wording, or provider details - see "Multi-project design" above.
 - No retries: if Stirling or Ollama is unavailable, DocPipe answers
   immediately with the matching error code. Retrying is left to the
   calling client.
-- DocPipe is stateless — no DB, no queue, no persisted jobs, no usage
-  tracking. Request in, response out.
+- DocPipe's document processing is stateless — no queue, no persisted
+  jobs. Request in, response out. The only exception is the optional
+  operator monitoring (below), disabled by default.
+- API keys are compared in constant time (SHA-256 digests with
+  `hmac.compare_digest`, every client checked).
+
+## Operator monitoring (optional, disabled by default)
+
+`monitoring.enabled: true` collects technical request metrics, processing
+step durations, system metrics and Ollama/Stirling status into a local
+SQLite database - only allow-listed, structured values (never bodies, file
+names, prompts, answers, keys or error message texts).
+`monitoring.web.enabled: true` additionally serves a read-only operator
+interface at `/monitor` with its own login (separate users file, Argon2id,
+mandatory TOTP, VPN/IP allowlist by default). Customer API keys never grant
+access to it. Users are created only with the local CLI
+`python -m system.tools.monitor_user`. The interface shows Overview, Live
+Activity, Projects & Clients, Performance, Server and Security (audit) dashboards
+plus detailed Ollama (service state, installed/loaded models, running AI calls,
+AI performance with weighted tokens/s) and Stirling PDF (per-operation statistics,
+status history) pages,
+with charts (Chart.js, served locally), data-quality and estimate markers, DE/EN
+and light/dark; its protected read-only data API is documented in
+[docs/architecture/monitoring-api.md](docs/architecture/monitoring-api.md).
+Configuration: `config.example.yaml` (`monitoring:`); design, security model and
+deployment requirements:
+[docs/architecture/monitoring-dashboard.md](docs/architecture/monitoring-dashboard.md).
+Installation, user/MFA setup, operation, backup/restore and rollback:
+[docs/operations/monitoring-operations.md](docs/operations/monitoring-operations.md).
+Local, synthetic load tests: [loadtest/README.md](loadtest/README.md).
+
+What the monitoring deliberately does not do: it has no log viewer and does not
+import Ollama or Stirling logs (the planned phase M6 was dropped); DocPipe's
+regular request log (below) is unchanged. It never writes to Ollama, Stirling
+or any client, and it has no GPU values unless a GPU provider is configured
+(none is by default). The `public_mfa` access mode exists but is not
+recommended for production; `allowlist` is the intended mode.
 
 ## Logging
 
 Structured, one line per request: timestamp, request ID, client ID,
-endpoint, HTTP status, duration. A `X-Request-ID` response header is set
+method, route template (e.g. `/api/v1/lab/prompts/{mode}`; `<unmatched>`
+for unknown paths - never the raw path or query string), HTTP status,
+duration. A `X-Request-ID` response header is set
 on every response for correlating client-side and server-side logs.
 `/documents/extract-text` additionally logs one line per successful
 request with input size, initial (pre-OCR) and final text *lengths*

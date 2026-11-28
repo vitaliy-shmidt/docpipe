@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+{% block heading %}{{ t.nav_activity }}{% endblock %}
+{% block filters %}{% with show=("client", "service", "status"), ranges=("live", "1h", "24h", "custom"), default_range="live" %}{% include "_filters.html" %}{% endwith %}{% endblock %}
+{% block content %}
+<section class="card mb-3">
+  <div class="card-header dpm-card-header">{{ icon("hourglass-split") }}<h2 class="h6 mb-0">{{ t.active }}</h2>
+    <span class="badge text-bg-primary ms-2" id="act-active-count">–</span></div>
+  <div class="card-body p-0"><div class="table-responsive"><table class="table table-sm align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.time }}</th><th scope="col">{{ t.age }}</th><th scope="col">{{ t.route }}</th>
+      <th scope="col">{{ t.service }}</th><th scope="col">{{ t.request_id }}</th></tr></thead>
+    <tbody id="act-active"></tbody></table></div></div>
+</section>
+<section class="card">
+  <div class="card-header dpm-card-header">{{ icon("check-circle") }}<h2 class="h6 mb-0">{{ t.finished }}</h2>
+    <span class="ms-auto dpm-meta" id="act-until"></span></div>
+  <div class="card-body p-0"><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0 dpm-table">
+    <thead><tr><th scope="col">{{ t.time }}</th><th scope="col">{{ t.client }}</th><th scope="col">{{ t.route }}</th>
+      <th scope="col">{{ t.http_status }}</th><th scope="col" class="text-end">{{ t.duration }}</th>
+      <th scope="col">{{ t.steps }}</th><th scope="col">{{ t.model }}</th><th scope="col">{{ t.request_id }}</th></tr></thead>
+    <tbody id="act-finished"></tbody></table></div>
+    <div class="dpm-empty text-center p-4 d-none" id="act-empty"><p class="mb-1 fw-semibold">{{ t.no_data }}</p>
+      <p class="text-body-secondary small mb-0">{{ t.no_data_hint }}</p></div>
+  </div>
+  <div class="card-footer text-center"><button class="btn btn-sm btn-outline-secondary d-none" type="button" id="act-more">{{ t.more }}</button></div>
+</section>
+{% endblock %}

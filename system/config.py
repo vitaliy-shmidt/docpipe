@@ -32,6 +32,8 @@ compatibility shim for a format that was never used in production.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import re
 from dataclasses import dataclass, field
@@ -47,6 +49,7 @@ from system.ai.text_optimization.settings import (
     default_text_optimization,
 )
 from system.assistant.modes import ASSISTANT_MODES
+from system.monitoring.settings import MonitoringConfigError, MonitoringSettings, parse_monitoring
 
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_MAX_FILE_SIZE_MB = 25
@@ -146,6 +149,10 @@ class OllamaSettings:
 
     base_url: str
     keep_alive: str = DEFAULT_OLLAMA_KEEP_ALIVE
+    # Ollama's `think` request field. None (option absent): the field is not
+    # sent - exactly the behaviour of every earlier DocPipe version. True/False
+    # are sent as given; see README "Ollama think".
+    think: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -238,12 +245,34 @@ class Settings:
     text_optimization: dict[str, TextOptimizationSettings] = field(default_factory=default_text_optimization)
     clients: dict[str, ClientConfig] = field(default_factory=dict)
     forms: FormsSettings = FormsSettings()
+    # Operator monitoring (docs/architecture/monitoring-dashboard.md) - disabled by default.
+    monitoring: MonitoringSettings = MonitoringSettings()
 
     def find_client_by_api_key(self, api_key: str) -> ClientConfig | None:
+        """Constant-time lookup (security hardening H1).
+
+        Both sides are reduced to SHA-256 digests, so every comparison is
+        between two 32-byte values regardless of the key lengths, and
+        `hmac.compare_digest` compares them without an early exit. Every
+        configured client is checked, also after a match, so the time taken
+        does not reveal which client (or whether any) matched. A client with
+        an empty configured key never matches - as before, since an empty
+        presented key is rejected earlier in system/auth.py.
+        """
+        presented = _key_digest(api_key)
+        found: ClientConfig | None = None
         for client in self.clients.values():
-            if client.api_key == api_key:
-                return client
-        return None
+            matches = hmac.compare_digest(_key_digest(client.api_key), presented)
+            if matches and client.api_key and found is None:
+                found = client
+        return found
+
+
+def _key_digest(key: object) -> bytes:
+    # Header values arrive as latin-1 decoded str; "surrogatepass" makes the
+    # encoding total, so no input can raise here.
+    text = key if isinstance(key, str) else ""
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
 
 
 def _load_yaml(path: str) -> dict:
@@ -515,6 +544,13 @@ def _parse_forms(raw_forms: object) -> FormsSettings:
     return FormsSettings(**values)
 
 
+def _parse_monitoring(raw: object) -> MonitoringSettings:
+    try:
+        return parse_monitoring(raw)
+    except MonitoringConfigError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def load_settings() -> Settings:
     config_path = os.environ.get("DOCPIPE_CONFIG", DEFAULT_CONFIG_PATH)
     raw = _load_yaml(config_path)
@@ -554,9 +590,18 @@ def load_settings() -> Settings:
             f"ollama.keep_alive has an invalid value {keep_alive!r} - expected a positive Ollama "
             "duration such as '30s', '5m', '15m', '1h', or a plain positive integer number of seconds."
         )
+    raw_think = raw_ollama.get("think")
+    if raw_think is not None and not isinstance(raw_think, bool):
+        # Only real YAML booleans: a quoted "false" or 0 is a typo that would
+        # otherwise silently change model behaviour.
+        raise ConfigError(
+            f"ollama.think has an invalid value {raw_think!r} - expected true, false, or the option omitted "
+            "(omitted: the field is not sent to Ollama)."
+        )
     ollama = OllamaSettings(
         base_url=os.environ.get("OLLAMA_URL", raw_ollama.get("base_url", "")),
         keep_alive=keep_alive,
+        think=raw_think,
     )
 
     raw_prompts = raw.get("prompts") or {}
@@ -597,6 +642,7 @@ def load_settings() -> Settings:
         clients=clients,
         text_optimization=_parse_text_optimization(raw.get("text_optimization")),
         forms=_parse_forms(raw.get("forms")),
+        monitoring=_parse_monitoring(raw.get("monitoring")),
     )
 
     # Unconditional (see _validate_prompt_defaults docstring) - unlike

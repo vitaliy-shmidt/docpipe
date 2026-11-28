@@ -3,3 +3,8 @@
 *.pdf binary
 # Bundled fonts (system/forms/fonts/): binary, never normalised.
 *.ttf binary
+# Vendored browser libraries: keep byte-identical to the verified npm files (SHA-256 in the vendor README).
+system/monitoring/web/static/vendor/bootstrap/*.min.* -text
+system/monitoring/web/static/vendor/chartjs/*.js -text
+# Shell scripts run on Linux (loadtest/run.sh): never check them out with CRLF.
+*.sh text eol=lf

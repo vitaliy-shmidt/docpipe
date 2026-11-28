@@ -27,9 +27,10 @@ def test_configured_keep_alive_reaches_the_shared_ollama_client(monkeypatch, tmp
 
     captured: dict = {}
 
-    def factory(base_url, keep_alive=None):
+    def factory(base_url, keep_alive=None, think=None):
         captured["base_url"] = base_url
         captured["keep_alive"] = keep_alive
+        captured["think"] = think
         return _NoopOllamaClient()
 
     monkeypatch.setattr(main_module, "OllamaClient", factory)
@@ -38,6 +39,7 @@ def test_configured_keep_alive_reaches_the_shared_ollama_client(monkeypatch, tmp
         pass
 
     assert captured["keep_alive"] == "7m"
+    assert captured["think"] is None  # ollama.think not configured: nothing changes
 
 
 class _NoopStirlingClient:

@@ -1,0 +1,4 @@
+# Browser tests of the operator dashboard (CI job "browser-tests"; optional locally).
+# Pinned: the Playwright package also pins the Chromium build it installs.
+-r requirements-dev.txt
+playwright==1.65.2

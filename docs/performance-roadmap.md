@@ -1,6 +1,6 @@
 # Performance findings and optimization roadmap
 
-> **Aktive GitHub Issues:** [#4 Document Evidence & Source Mapping](https://github.com/vitaliy-shmidt/docpipe/issues/4) · [#2 External AI Providers](https://github.com/vitaliy-shmidt/docpipe/issues/2). Die nachfolgende Roadmap hält weiterhin die historischen Messungen und Entscheidungen fest.
+> **Aktive GitHub Issues:** [#4 Document Evidence & Source Mapping](https://github.com/vitaliy-shmidt/docpipe/issues/4) · [#2 External AI Providers](https://github.com/vitaliy-shmidt/docpipe/issues/2) · zurückgestellt mit niedrigster Priorität: [#7 Client Administration, API-Key Lifecycle and Service Permissions](https://github.com/vitaliy-shmidt/docpipe/issues/7). Die nachfolgende Roadmap hält weiterhin die historischen Messungen und Entscheidungen fest.
 
 
 Status: **2026-11-04**

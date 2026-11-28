@@ -24,6 +24,9 @@ from system import VERSION
 from system.ai.prompt_registry import PromptRegistry
 from system.config import load_settings
 from system.errors import STATUS_BY_CODE, DocPipeError
+from system.monitoring.context import note_error_code
+from system.monitoring.middleware import MonitoringMiddleware
+from system.monitoring.registry import log_safe_method, log_safe_route
 from system.routes import analyze, assistant, capabilities, documents, forms, health, lab
 from system.services.ollama import OllamaClient
 from system.services.stirling import StirlingClient
@@ -36,14 +39,47 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 async def lifespan(app: FastAPI):
     settings = load_settings()
     app.state.settings = settings
-    app.state.stirling_client = StirlingClient(settings.stirling)
-    app.state.ollama_client = OllamaClient(settings.ollama.base_url, keep_alive=settings.ollama.keep_alive)
+    stirling_client = StirlingClient(settings.stirling)
+    ollama_client = OllamaClient(
+        settings.ollama.base_url, keep_alive=settings.ollama.keep_alive, think=settings.ollama.think
+    )
+    monitor = None
+    if settings.monitoring.enabled:
+        # Imported lazily: with monitoring disabled none of the runtime
+        # (store, collector, probes) is even loaded, and the routes keep
+        # using exactly the unwrapped client objects.
+        from system.monitoring.monitor import Monitor
+        from system.monitoring.proxies import MonitoredOllamaClient, MonitoredStirlingClient
+
+        monitor = Monitor(settings)
+        stirling_client = MonitoredStirlingClient(stirling_client)
+        ollama_client = MonitoredOllamaClient(ollama_client, monitor.known_models, monitor)
+        monitor.start()
+    web = None
+    if monitor is not None and settings.monitoring.web.enabled:
+        # Phase M3: separately enabled operator interface. build_web never
+        # raises; if the interface cannot be constructed it stays absent.
+        from system.monitoring.web.app import build_web
+
+        web = build_web(settings, monitor)
+    app.state.monitoring = monitor
+    app.state.monitoring_web = web
+    app.state.stirling_client = stirling_client
+    app.state.ollama_client = ollama_client
     app.state.prompt_registry = PromptRegistry(
         settings.prompts.base_dir, settings.prompts.runtime_dir, settings.prompts.max_content_length
     )
-    yield
-    app.state.stirling_client.close()
-    app.state.ollama_client.close()
+    try:
+        yield
+    finally:
+        if web is not None:
+            app.state.monitoring_web = None
+            web.close()
+        if monitor is not None:
+            monitor.stop()
+            app.state.monitoring = None
+        app.state.stirling_client.close()
+        app.state.ollama_client.close()
 
 
 app = FastAPI(title="DocPipe", version=VERSION, lifespan=lifespan)
@@ -59,7 +95,10 @@ app.include_router(assistant.router)
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
-    request_id = str(uuid.uuid4())
+    # MonitoringMiddleware (outermost, only when monitoring is enabled)
+    # assigns the id first so the monitoring record correlates with this
+    # log line and X-Request-ID; otherwise a fresh one, exactly as before.
+    request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
     request.state.request_id = request_id
     request.state.client_id = None
 
@@ -68,20 +107,32 @@ async def request_logging_middleware(request: Request, call_next):
     duration_ms = round((time.monotonic() - started_at) * 1000, 1)
 
     response.headers["X-Request-ID"] = request_id
+    # Security hardening H2: never the raw (URL-decoded, client-controlled)
+    # path - it can carry control characters (log injection) or secrets.
+    # `path=` is the template of the route that handled the request (e.g.
+    # /api/v1/lab/prompts/{mode}), `<unmatched>` for unknown paths; the
+    # query string was never logged and still is not.
     logger.info(
         "request_id=%s client_id=%s method=%s path=%s status=%s duration_ms=%s",
         request_id,
         request.state.client_id,
-        request.method,
-        request.url.path,
+        log_safe_method(request.method),
+        log_safe_route(request.scope),
         response.status_code,
         duration_ms,
     )
     return response
 
 
+# Added after the logging middleware, so it is the outermost user middleware
+# (it also measures the logging middleware and sees unhandled exceptions).
+# A pure pass-through while app.state.monitoring is None.
+app.add_middleware(MonitoringMiddleware)
+
+
 @app.exception_handler(DocPipeError)
 async def docpipe_error_handler(request: Request, exc: DocPipeError) -> JSONResponse:
+    note_error_code(exc.code)
     content = {"ok": False, "code": exc.code, "message": exc.message}
     if getattr(exc, "details", None):
         content["details"] = exc.details
@@ -103,6 +154,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     # `mode`/`context` field.
     is_file_endpoint = request.url.path in _FILE_ENDPOINTS
     code = "invalid_file" if is_file_endpoint else "invalid_request"
+    note_error_code(code)
     return JSONResponse(
         status_code=STATUS_BY_CODE[code],
         content={"ok": False, "code": code, "message": "The request could not be processed."},
@@ -119,6 +171,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
         code, message = "internal_error", "Not found."
     else:
         code, message = "internal_error", "Request failed."
+    note_error_code(code)
     return JSONResponse(status_code=exc.status_code, content={"ok": False, "code": code, "message": message})
 
 

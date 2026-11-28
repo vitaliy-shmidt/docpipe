@@ -1,0 +1,164 @@
+/* DocPipe Monitoring - small additions to Bootstrap 5.3 (served locally, CSP style-src 'self'). */
+
+:root {
+  --dpm-brand: #1f5f8b;
+  --dpm-brand-soft: rgba(31, 95, 139, 0.12);
+}
+
+[data-bs-theme="dark"] {
+  --dpm-brand: #6cb4e4;
+  --dpm-brand-soft: rgba(108, 180, 228, 0.16);
+}
+
+.bi {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.dpm-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.75rem;
+  background: var(--dpm-brand-soft);
+  color: var(--dpm-brand);
+  font-size: 1.35rem;
+}
+
+.dpm-brand-mark-sm {
+  width: 2rem;
+  height: 2rem;
+  font-size: 1rem;
+  border-radius: 0.5rem;
+}
+
+/* Sign-in and message pages */
+.dpm-auth {
+  min-height: 100vh;
+  background: var(--bs-tertiary-bg);
+}
+
+.dpm-auth-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding-top: 1.5rem;
+  padding-bottom: 1.5rem;
+}
+
+.dpm-auth-card {
+  width: 100%;
+  max-width: 30rem;
+}
+
+.dpm-code {
+  letter-spacing: 0.4em;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Shell */
+.dpm-topbar {
+  z-index: 1030;
+}
+
+@media (min-width: 992px) {
+  .dpm-sidebar {
+    position: sticky;
+    top: 3.6rem;
+    height: calc(100vh - 3.6rem);
+    overflow-y: auto;
+  }
+}
+
+.dpm-sidebar .nav-link.disabled {
+  opacity: 0.7;
+}
+
+.dpm-status dd {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Dashboard (Phase M4) ------------------------------------------------------------- */
+
+/* Categorical chart palette - distinguishable in light and dark, colour-blind friendly order. */
+:root {
+  --dpm-c1: #2a6fdb; --dpm-c2: #0f9d8a; --dpm-c3: #7a5af5; --dpm-c4: #d64545;
+  --dpm-c5: #e08a1e; --dpm-c6: #6b7a90; --dpm-c7: #c2459c; --dpm-c8: #3a9b3a;
+  --dpm-ok: #198754; --dpm-warn: #c98a04; --dpm-bad: #d63939; --dpm-muted: #646c79; /* WCAG AA on white and tile backgrounds (M7) */
+}
+[data-bs-theme="dark"] {
+  --dpm-c1: #6ea2ff; --dpm-c2: #36c3ae; --dpm-c3: #a28bff; --dpm-c4: #ff7a7a;
+  --dpm-c5: #ffb057; --dpm-c6: #9aa7ba; --dpm-c7: #f07cc8; --dpm-c8: #6fd06f;
+  --dpm-ok: #4cc38a; --dpm-warn: #f0b429; --dpm-bad: #ff6b6b; --dpm-muted: #8b95a5;
+}
+
+.dpm-main { min-width: 0; }
+.dpm-card-header { display: flex; align-items: center; gap: .5rem; background: transparent; }
+.dpm-meta { font-size: .75rem; color: var(--bs-secondary-color); text-align: right; }
+
+.dpm-chart { position: relative; height: 260px; }
+.dpm-chart-sm { height: 180px; }
+@media (max-width: 575.98px) { .dpm-chart { height: 300px; } .dpm-chart-sm { height: 200px; } }  /* legends wrap on phones (M7) */
+
+/* KPI tone is carried by the value itself, not by a coloured card edge. */
+.dpm-kpi-ok .dpm-kpi-value { color: var(--dpm-ok); }
+.dpm-kpi-bad .dpm-kpi-value { color: var(--dpm-bad); }
+.dpm-kpi-label { font-size: .78rem; color: var(--bs-secondary-color); text-transform: none; }
+.dpm-kpi-value { font-size: 1.45rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.dpm-kpi-sub { font-size: .75rem; color: var(--bs-secondary-color); }
+.dpm-na { color: var(--dpm-muted); font-weight: 400; }
+.dpm-approx { font-weight: 500; }
+
+.dpm-tile { border: 1px solid var(--bs-border-color-translucent); border-radius: .5rem; padding: .6rem .75rem; }
+.dpm-tile-value { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.dpm-health { border-top: 3px solid var(--dpm-muted); }
+.dpm-dot { width: .7rem; height: .7rem; border-radius: 50%; background: var(--dpm-muted); flex-shrink: 0; }
+.dpm-state-online { border-top-color: var(--dpm-ok); } .dpm-state-online .dpm-dot { background: var(--dpm-ok); }
+.dpm-state-degraded { border-top-color: var(--dpm-warn); } .dpm-state-degraded .dpm-dot { background: var(--dpm-warn); }
+.dpm-state-offline { border-top-color: var(--dpm-bad); } .dpm-state-offline .dpm-dot { background: var(--dpm-bad); }
+
+.dpm-table th { font-size: .75rem; font-weight: 600; color: var(--bs-secondary-color); white-space: nowrap; }
+.dpm-table td { font-variant-numeric: tabular-nums; }
+.dpm-id { max-width: 9rem; }
+.dpm-row-stale td { color: var(--dpm-muted); }
+/* Phase M5: upstream pages */
+.dpm-tile-value.dpm-tone-bad { color: var(--dpm-bad); }
+.dpm-th-group { font-size: .75rem; font-weight: 600; color: var(--dpm-muted); border-bottom-width: 1px; }
+.dpm-reported { background: var(--bs-tertiary-bg); }
+.dpm-keepalive { font-variant-numeric: tabular-nums; }
+.dpm-kpi-head .badge { white-space: normal; text-align: start; max-width: 100%; }
+
+.dpm-empty-icon { font-size: 2rem; color: var(--bs-secondary-color); }
+
+/* Stale data: keep showing it, but visibly marked. */
+.dpm-is-stale .dpm-kpi-value, .dpm-is-stale .dpm-tile-value, .dpm-is-stale canvas { opacity: .55; }
+
+.dpm-live-dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .35rem;
+  background: var(--dpm-ok); vertical-align: .05em; animation: dpm-pulse 2.4s ease-in-out infinite; }
+.dpm-paused .dpm-live-dot { background: var(--dpm-muted); animation: none; }
+@keyframes dpm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+.card, .dpm-tile { transition: border-color .2s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dpm-live-dot { animation: none; }
+  .card, .dpm-tile { transition: none; }
+}
+/* Phones and wide fonts: the top bar never forces horizontal scrolling (freshness truncates,
+   full text in its title), KPI headers and labels may break anywhere as a last resort. */
+.dpm-topbar .dpm-freshness { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dpm-kpi .card-body { min-width: 0; }
+.dpm-kpi-label, .dpm-kpi-head .badge { overflow-wrap: anywhere; }
+
+/* Phase M7 contrast review: Bootstrap keeps the light-mode outline colours in dark mode
+   (3.3:1 on the dark top bar). Text of outline buttons gets AA contrast there. */
+[data-bs-theme="dark"] .btn-outline-secondary { --bs-btn-color: #adb5bd; --bs-btn-border-color: #6c757d; }
+[data-bs-theme="dark"] .btn-outline-danger { --bs-btn-color: #ea868f; --bs-btn-border-color: #ea868f; }

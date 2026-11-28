@@ -116,9 +116,10 @@ SAMPLE_MAINTENANCE_RESULT = {
 class FakeOllamaClient:
     """Test double standing in for the real Ollama HTTP client."""
 
-    def __init__(self, base_url: str, keep_alive: str | None = None) -> None:
+    def __init__(self, base_url: str, keep_alive: str | None = None, think: bool | None = None) -> None:
         self.base_url = base_url
         self.keep_alive = keep_alive
+        self.think = think
         self.mode = "success"
         self.result = dict(SAMPLE_MAINTENANCE_RESULT)
         self.calls = 0
@@ -326,8 +327,8 @@ def fake_stirling_holder(monkeypatch, tmp_path):
 def fake_ollama_holder(monkeypatch):
     holder: dict = {}
 
-    def factory(base_url, keep_alive=None):
-        instance = FakeOllamaClient(base_url, keep_alive=keep_alive)
+    def factory(base_url, keep_alive=None, think=None):
+        instance = FakeOllamaClient(base_url, keep_alive=keep_alive, think=think)
         holder["client"] = instance
         return instance
 
