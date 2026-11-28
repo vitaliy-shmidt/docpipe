@@ -29,7 +29,7 @@ jobs:
   # turns a missing browser into a failure instead of a skip.
   browser-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       contents: read
     env:
@@ -51,7 +51,9 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Browser tests
-        run: pytest -v tests/test_monitor_dashboard_browser.py tests/test_monitor_upstreams_browser.py
+        run: >-
+          pytest -v tests/test_monitor_dashboard_browser.py tests/test_monitor_upstreams_browser.py
+          tests/test_monitor_visual_release.py
 
       - name: Screenshots (synthetic data)
         if: always()
