@@ -192,6 +192,21 @@ def test_users_file_with_too_wide_permissions_is_rejected(tmp_path, mode):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
+def test_users_file_of_another_owner_is_rejected(tmp_path, monkeypatch):
+    """Phase M7 review: the owner check had no test. A users file that does not
+    belong to the process user (e.g. root-owned copy) locks the interface."""
+    from system.monitoring.web import users as users_module
+
+    path = tmp_path / "users.yaml"
+    write_users(path, [user_entry()])
+    owner = path.stat().st_uid
+    monkeypatch.setattr(users_module.os, "geteuid", lambda: owner + 1)
+    with pytest.raises(UsersUnavailable) as exc:
+        UsersFile(path).users()
+    assert exc.value.reason == "users_file_owner"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
 def test_users_file_0600_and_0400_are_accepted(tmp_path):
     path = tmp_path / "users.yaml"
     write_users(path, [user_entry()])
