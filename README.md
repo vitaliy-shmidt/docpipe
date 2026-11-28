@@ -1086,6 +1086,16 @@ and light/dark; its protected read-only data API is documented in
 Configuration: `config.example.yaml` (`monitoring:`); design, security model and
 deployment requirements:
 [docs/architecture/monitoring-dashboard.md](docs/architecture/monitoring-dashboard.md).
+Installation, user/MFA setup, operation, backup/restore and rollback:
+[docs/operations/monitoring-operations.md](docs/operations/monitoring-operations.md).
+Local, synthetic load tests: [loadtest/README.md](loadtest/README.md).
+
+What the monitoring deliberately does not do: it has no log viewer and does not
+import Ollama or Stirling logs (the planned phase M6 was dropped); DocPipe's
+regular request log (below) is unchanged. It never writes to Ollama, Stirling
+or any client, and it has no GPU values unless a GPU provider is configured
+(none is by default). The `public_mfa` access mode exists but is not
+recommended for production; `allowlist` is the intended mode.
 
 ## Logging
 

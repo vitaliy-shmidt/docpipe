@@ -170,13 +170,17 @@ Container-CPU/RAM von Stirling: **nicht verfügbar** (nur über Docker-Socket).
 | Quelle | Ort | Sicher übernehmbar? |
 |---|---|---|
 | DocPipe stdout | Container-Log | **Nein, nicht roh**: Tracebacks (`logger.exception`) können Exception-Texte mit Dokument-/Bibliotheksinhalten enthalten; `path` ist roh. |
-| DocPipe strukturierte Ereignisse (neu, M2/M6) | Monitoring-DB | **Ja** – ausschließlich Enum-Werte und Zahlen. |
+| DocPipe strukturierte Ereignisse (neu, M2) | Monitoring-DB | **Ja** – ausschließlich Enum-Werte und Zahlen. |
 | Ollama | Host-Dienst (journald) [A] | **Nein** – aus dem Container nicht ohne Host-Mounts erreichbar; enthält ggf. Prompt-Fragmente. |
 | Stirling | Container-Log / Volume [A] | **Nein** – nur über Docker-Socket; kann Dateinamen enthalten. |
 
 Entscheidung **[E]**: Der Log-Viewer zeigt in M6 **nur strukturierte
 DocPipe-Ereignisse** aus der eigenen Monitoring-DB. Native Logs von Ollama und
 Stirling werden nicht eingebunden; die UI dokumentiert diese Einschränkung.
+
+> **Überholt (M7):** M6 entfällt, es gibt keinen Log-Viewer. Die strukturierten
+> Ereignisse und das Security-Audit bleiben erhalten und erscheinen weiterhin in den
+> jeweiligen Bereichen, siehe §17.1.
 
 ### 1.9 Docker-Einschränkungen [V/A]
 
@@ -530,7 +534,7 @@ Alle unter `/monitor/api/v1/`, nur `GET`, Session-Pflicht, JSON,
 | `GET /server` | Samples mit Herkunftslabel, `unavailable`-Gründe |
 | `GET /ollama` | Probe, Version, Modelle (installiert/geladen), DocPipe-KI-Statistik, Tokens/s |
 | `GET /stirling` | Probe, Version, Operationen, Fehler, Timeouts |
-| `GET /events?severity&service&client&q&from&to&cursor` | strukturierte Ereignisse (M6) |
+| ~~`GET /events?severity&service&client&q&from&to&cursor`~~ | entfällt mit M6 (§17.1) |
 | `GET /security` | eigene Audit-Einträge (Login-Historie), aktive eigene Sessions |
 | `GET /meta` | Feature-Flags, welche Bereiche implementiert sind, Collector-Status |
 
@@ -564,7 +568,7 @@ Requests auf `/monitor*` fließen **nicht** in die Kundenstatistik ein.
   #2 deaktiviert.
 
 Bereiche: Overview · Live Activity · Projects & Clients · Performance · Server ·
-Ollama · Stirling PDF · AI Connectors (deaktiviert) · Logs (ab M6) · Security
+Ollama · Stirling PDF · AI Connectors (deaktiviert, Issue #2) · Security (Logs entfällt, §17.1)
 (eigene Anmeldungen/Sessions, Audit, Konfigurationsstatus read-only).
 
 ---
@@ -629,7 +633,7 @@ Abnahme: keine Generierungs- oder PDF-Calls durch das Monitoring (Test mit
 Mock, der jeden `POST` als Fehler wertet); Ollama/Stirling offline/langsam/
 fehlerhafte JSON → korrekte Anzeige; ältere Ollama-Antworten ohne neue Felder.
 
-### M6 – Live-Logs
+### M6 – Live-Logs (entfällt, Entscheidung in M7, §17.1)
 Umfang: strukturierte Ereignisse, Viewer mit Suche (nur über Enum-/ID-Felder),
 Filter, Pagination, Live/Pause, Retention.
 Abnahme: Log-Injection-Tests (CR/LF, ANSI, Unicode-Steuerzeichen, Überlänge);
@@ -1145,7 +1149,7 @@ Hier steht der tatsächlich implementierte Stand; die Details der API stehen in
 | Server | `/monitor/server` | Dienststatus, Kacheln (Host, Container, Prozess, Dateisystem, Netz-Namespace, GPU) mit Herkunft und Status; Verläufe CPU, Speicher, Netz, freier Plattenplatz |
 | Sicherheit | `/monitor/security` | Audit-Kennzahlen nach Kategorie, Verlauf, eigene aktive Sessions, Ereignisliste (paginiert) – nur lesend |
 | Ollama, Stirling PDF | – | deaktiviert, „geplant M5“; allgemeiner Status in Übersicht und Server |
-| Logs / KI-Connectoren | – | deaktiviert, „geplant M6“ bzw. „#2“ |
+| KI-Connectoren | – | deaktiviert, „geplant #2“ (der Menüpunkt Logs ist seit M7 entfernt) |
 
 Es gibt keine Administration, keine Steuerung und keine Änderung von Konfigurationen.
 
@@ -1388,3 +1392,344 @@ Architekturänderung des Collectors und wurde deshalb in M5 nicht vorgenommen.
 - **Statusprüfungen im eigenen Thread:** siehe 16.4, nur nach Freigabe.
 - **Bestehende Pre-v3-Buckets** ohne vollständige Rohdaten bleiben dauerhaft „teilweise
   verfügbar“, bis sie durch die Retention entfallen.
+
+## 17. Phase M7 – Qualitätssicherung, Stabilisierung, Release-Vorbereitung
+
+Stand: Release-Kandidat auf `feature/monitoring-dashboard`. **Nicht** gemergt, nicht
+getaggt, nicht deployt. Die spätere Installation beschreibt
+[monitoring-operations.md](../operations/monitoring-operations.md).
+
+### 17.1 Entscheidung: M6 (Live-Logs) entfällt
+
+Der Betreiber hat entschieden, auf eine zusätzliche Logging-Infrastruktur zu
+verzichten. Konsequenzen:
+
+- Es gibt **keinen Log-Viewer**. Der geplante Menüpunkt „Logs“ ist entfernt;
+  `meta.sections` führt ihn nicht mehr.
+- Es entstehen **keine neuen Logs** nur für das Monitoring, kein Log-Collector,
+  kein Import nativer Ollama- oder Stirling-Logs, keine doppelte Speicherung und
+  keine zusätzlichen Berechtigungen.
+- **Erhalten bleiben:**
+  - die strukturierten Ereignisse (Tabelle `events`);
+  - das Security-Audit (Bereich Security);
+  - die technischen Fehlerinformationen in den Bereichen, in denen sie
+    entstehen: Fehlercodes in Live Activity und Performance, Ergebnisse und
+    Statusprüfungen in Ollama bzw. Stirling, Datenqualität auf jeder Seite.
+- Das reguläre DocPipe-Request-Log ist unverändert.
+- **AI Connectors** bleibt als „geplant (#2)“ markiert. Issue #7 (Client-
+  Administration, API-Key-Lebenszyklus) ist zurückgestellt und hat die
+  niedrigste Priorität; #4 und #2 gehören nicht zu diesem Release.
+- Das Monitoring bleibt strikt **read-only**.
+
+### 17.2 Funktionsreview
+
+| Bereich | Navigation, Live, Filter | Daten- und Statuszustände | Geprüft durch |
+|---|---|---|---|
+| Übersicht | Zeitraum, Live/Pause, Hintergrund-Pause | Lücken, unvollständig, Schätzung, leer, GPU nicht verfügbar | `test_monitor_dashboard_api`, `test_monitor_dashboard_browser` |
+| Live Activity | Zeitraum, Client, Dienst, Status, Pagination | veraltete Snapshots anderer Worker | dto. |
+| Projects & Clients | Zeitraum, Vorperiode | nicht authentifizierte Anfragen getrennt | dto. |
+| Performance | Client, Dienst, Schrittverschachtelung | exakt vs. Histogramm | dto. |
+| Server | Zeitraum | Quelle, Status, Grund je Messwert | dto. |
+| Ollama | Modell, Client, Aufrufart, Status | installiert/geladen/aktiv, veraltet, offline, Paarsummen teilweise | `test_monitor_upstreams_api`, `test_monitor_upstreams_browser` |
+| Stirling PDF | Client, Operation, Status | offline, Fehler, keine Daten | dto. |
+| Security | Kategorien, Pagination | eigene Sessions, Audit | `test_monitor_dashboard_api` |
+| alle | Sessionablauf (Polling verlängert nicht, 401 → Anmeldung) | DE/EN, hell/dunkel, 320–1440 px | `test_monitor_web_auth`, `test_monitor_visual_release` |
+
+Entfernt wurden nur der Logs-Platzhalter und die M6-Verweise. Neue Funktionen
+gibt es in M7 nicht.
+
+### 17.3 Sicherheitsreview
+
+| Anforderung | Ergebnis | Nachweis |
+|---|---|---|
+| Argon2id, verpflichtendes TOTP | Produktionsparameter; ohne zweiten Faktor keine Session | `test_monitor_web_config::test_password_hashes_use_production_argon2id_parameters`, `test_monitor_web_auth` |
+| TOTP-Replay-Schutz | Code nur einmal gültig, atomar über Worker hinweg | `test_totp_code_cannot_be_reused`, `test_parallel_mfa_requests_with_the_same_code_succeed_once`, `test_replay_check_is_atomic_across_store_connections` |
+| Sessions, Rotation, Logout | `__Host-`-Cookies (Secure, HttpOnly, SameSite=Strict), keine Session-Fixierung, serverseitiges Logout, Begrenzung pro Benutzer | `test_session_fixation_is_impossible`, `test_logout_invalidates_the_session_server_side`, `test_sessions_per_user_are_limited` |
+| Idle- und absolute Timeouts | Polling verlängert nicht; absolute Grenze hält | `test_idle_timeout_and_polling_does_not_extend_it`, `test_absolute_timeout_ends_even_an_active_session` |
+| CSRF, Origin | sessiongebundenes Token, fremder Origin wird abgelehnt | `test_monitor_web_protection` |
+| XSS | nur `textContent`, Autoescape, Modellnamen bereinigt | `test_pages_have_no_inline_code_…`, `test_manipulated_model_names_are_never_returned_raw` |
+| SQL-Injection | nur parametrisiertes SQL, Filter gegen Registry bzw. Konfiguration validiert | `test_filters_are_validated` (M4/M5) |
+| CSP | `default-src 'none'`, kein Inline-Code, kein CDN; im Browser keine Verstöße | `test_monitor_visual_release` (alle Seiten) |
+| HTTPS-Pflicht | Standard; Ausnahme nur bei reiner Loopback-Allowlist | `test_web_interface_requires_https_by_default`, `test_local_development_without_https_on_loopback_only` |
+| Trusted Proxies | Header nur von `trusted_proxies`, rechtester nicht vertrauter Eintrag, fehlerhafte Header werden abgelehnt (fail-closed) | `test_monitor_web_netaccess` |
+| IP-Allowlist | jeder `/monitor`-Pfad außerhalb abgelehnt | `test_every_monitor_path_is_denied_outside_the_allowlist` |
+| Login-Rate-Limits | IP- und Benutzersperre, Argon2-Begrenzung, über Worker geteilt | `test_brute_force_*`, `test_rate_limits_are_shared_between_worker_processes` |
+| Abfragebegrenzung | 3-s-Zeitbudget, 120 Punkte, `api_requests_per_minute` | `test_monitor_dashboard_api` |
+| Kunden-API-Keys | **keine** Monitoring-Route mit irgendeinem Kunden-Key, in jeder Header-Form, auch mit gefälschten Cookies | **neu:** `test_monitor_route_matrix` (alle Routen aus der App-Registry) |
+| Getrennte Auth-Datenbank | eigene Datei, fail-closed, eigene Größengrenze | `test_monitor_web_failures` |
+| Dateirechte und Eigentümer | Benutzerdatei 0600 und Eigentümer = Prozess-UID; Datenbanken 0600 (auch `-wal` und `-shm`, unter Linux geprüft) | `test_users_file_with_too_wide_permissions_is_rejected`, **neu:** `test_users_file_of_another_owner_is_rejected`, `test_restored_files_get_private_permissions` |
+| Geheimnisbereinigung | siehe §17.4 | `test_monitor_privacy_release` |
+| Abhängigkeiten | `pip-audit` gegen `requirements.txt` und gegen die tatsächlich im Image installierten Pakete: keine bekannten Schwachstellen (Stand 28.11.2026). Die vendorten Bibliotheken Bootstrap 5.3.3 und Chart.js 4.4.7 deckt `pip-audit` nicht ab; dafür sind keine Sicherheitsmeldungen bekannt (Annahme nach Kenntnisstand, nicht automatisiert geprüft) | §17.10 |
+| H1, H2, H5 | Tests erneut grün | `test_api_key_constant_time`, `test_access_log_hardening`, `test_uvicorn_proxy_header_rewriting_is_detected` |
+
+**Offene Risiken aus M3** (Bewertung in [hardening-backlog.md](../security/hardening-backlog.md#bewertung-zum-release-kandidaten-phase-m7)):
+
+- **Lockout-DoS:** in `allowlist` niedrig, in `public_mfa` mittel. `public_mfa`
+  ist deshalb **nicht** für die Produktion freigegeben.
+- **Uvicorn-Start:** Das Image ist korrekt. Ein überschriebener Startbefehl ist
+  ein Prüfpunkt der Installation; andere Launcher werden nicht technisch erkannt.
+- **Eigentümer und Dateirechte unter Linux:** geprüft, inklusive des neuen
+  Eigentümertests. Ein bereits vorhandenes Datenverzeichnis behält seine Rechte;
+  Anforderung 0700 in der Betriebsanleitung.
+
+Keine bestehende Sicherheitsmaßnahme wurde gelockert.
+
+### 17.4 Datenschutzprüfung
+
+Neu: `tests/test_monitor_privacy_release.py`. Kanarienwerte stecken in:
+
+- Dokumenten, Dateinamen, Headern, Query-Strings;
+- Prompts, KI-Antworten, Assistentenfragen, Formular-Passwörtern;
+- unbekannten Pfaden;
+- dem konfigurierten Upstream-Host, gegen den echte Statusprüfungen fehlschlagen;
+- dem Passwort eines Operators.
+
+Danach darf keiner dieser Werte auftauchen, ebenso wenig Session-Token,
+TOTP-Secret, Passwort-Hash, Kunden-Keys, der Stirling-Key oder „Bearer“. Geprüft
+werden:
+
+- die **Rohbytes aller Dateien** im Datenverzeichnis (`monitor.db`,
+  `monitor-auth.db`, jeweils `-wal` und `-shm`), auch UTF-16;
+- **jede Daten-API-Antwort** (alle Bereiche, 1 h, 24 h, 7 d) und jede HTML-Seite;
+- die **Log-Ausgabe**.
+
+Zusammen mit den bestehenden Tests (`test_monitoring_security`,
+`test_monitor_web_failures::test_no_secrets_in_audit_logs_html_or_api`) gilt:
+**In keiner Datei, keiner API-Antwort, keiner Seite und keinem eigenen Log-Eintrag von DocPipe taucht einer der Werte auf**.
+
+### 17.5 Performance- und Lasttests
+
+Methodik: [loadtest/README.md](../../loadtest/README.md). **Lokale,
+synthetische Messungen, keine Produktionsmessungen.**
+
+- **Testrechner:** Notebook mit Intel Core i7-7600U (2 Kerne, 4 Threads), WSL2
+  mit 4 vCPU und 7,7 GiB RAM, Docker Engine 29.1.3.
+- **DocPipe-Container:** `--cpus 2 --memory 1g`; Lastgenerator `--cpus 1.5`.
+- **Upstreams:** Fake über HTTP (KI 150 ms ±20 %, PDF 40 ms ±20 %).
+
+**Überhead, sequenziell** (1 Worker, je 3 abwechselnde Wiederholungen,
+Mittelwerte; 60 s Leerlauf, dann je 30 s `health` bzw. `extract` mit
+Parallelität 1):
+
+| Variante | CPU im Leerlauf (% eines Kerns) | RSS im Leerlauf | health p50 / p95 / p99 | extract p50 / p95 / p99 |
+|---|---|---|---|---|
+| aus | 0,88 | 85,4 MiB | 3,6 / 7,6 / 14,2 ms | 91,6 / 99,6 / 100,6 ms |
+| Erfassung | 0,68 | 89,3 MiB | 3,3 / 6,1 / 11,4 ms | 91,6 / 99,8 / 101,9 ms |
+| Erfassung + Web | 1,13 | 94,3 MiB | 4,6 / 10,6 / 16,5 ms | 92,6 / 100,1 / 102,5 ms |
+
+**In-Process** (`python -m system.tools.monitoring_overhead` im Container mit
+denselben Grenzen, 3 Läufe):
+
+- Monitoring-Codepfad: 18–28 µs pro Request.
+- Ende-zu-Ende über den ASGI-Stack: Median +0,15 bis +0,30 ms.
+- Flush von 5.000 gepufferten Requests: 46–97 ms.
+
+**Bewertung gegen die Ziele:**
+
+| Ziel | Ergebnis |
+|---|---|
+| < 1 ms zusätzliche Latenz (p99) | **In-Process erfüllt.** Codepfad ≤ 28 µs, Ende-zu-Ende-Median ≤ 0,3 ms. **Auf HTTP-Ebene nicht belastbar nachweisbar:** Zwischen identischen Läufen schwankt p99 auf diesem Notebook um ±5 ms (health: Erfassung sogar 2,8 ms *besser* als aus). Bei `extract` liegt p99 um +1,3 ms (Erfassung) bzw. +1,9 ms (Web) höher, p95 nur um +0,3 bzw. +0,5 ms. Das liegt innerhalb der Streuung, ist aber kein Nachweis für < 1 ms. |
+| < 1 % CPU im Leerlauf | **Erfüllt.** −0,20 bzw. +0,25 Prozentpunkte gegenüber „aus“; die Grundlast (Collector-Takt 0,5 s, Probes, Sampler) liegt innerhalb der Messstreuung. |
+| < 30 MiB RSS (Foundation) | **Erfüllt.** Erfassung +3,9 MiB im Leerlauf bzw. +5,8 MiB nach Last. Web und Auth separat: +9 MiB im Leerlauf bzw. +24 MiB nach Last mit Dashboards (1 Worker). Bei 4 Workern: Erfassung +17 MiB (≈ 4,3 MiB pro Worker), Web +48 MiB (≈ 12 MiB pro Worker). |
+
+**Last: 50 gleichzeitige Requests**, gemischt health/extract/analyze, 60 s,
+Mittel aus 3 Wiederholungen:
+
+| Variante | Worker | Durchsatz | p50 | p95 | p99 | Dashboard p95 | RSS nach Last |
+|---|---|---|---|---|---|---|---|
+| aus | 1 | 77,9 rps | 423 ms | 2043 ms | 3167 ms | – | 96,7 MiB |
+| Erfassung | 1 | 84,2 rps | 396 ms | 1852 ms | 2902 ms | – | 102,5 MiB |
+| Erfassung + Web, 3 Sitzungen | 1 | 80,5 rps | 417 ms | 1972 ms | 3140 ms | 411 ms | 121,1 MiB |
+| aus | 4 | 90,9 rps | 344 ms | 1748 ms | 2828 ms | – | 396,1 MiB |
+| Erfassung | 4 | 93,2 rps | 342 ms | 1734 ms | 2772 ms | – | 413,4 MiB |
+| Erfassung + Web, 3 Sitzungen | 4 | 100,4 rps | 318 ms | 1568 ms | 2498 ms | 154 ms | 444,6 MiB |
+
+- **Sättigung:** 50 parallele Requests sättigen die 2 CPUs des Containers
+  (health p50 > 200 ms). Die Absolutwerte beschreiben also diese Sättigung,
+  nicht DocPipe im Normalbetrieb.
+- **Streuung:** Zwischen identischen Läufen streut der Durchsatz um ±10 %
+  (z. B. Erfassung, 4 Worker: 81–100 rps). Ein Nachteil durch Monitoring ist
+  innerhalb dieser Streuung **nicht messbar**; die Varianten mit Monitoring
+  liegen teils sogar vorn.
+- **Verbindungsabbrüche:** 0–5 `ReadError` pro Lauf (≤ 0,1 %), in **allen**
+  Varianten einschließlich „aus“. Das ist ein Keep-alive-Wettlauf zwischen
+  Lastgenerator und Uvicorn unter Sättigung, kein Monitoring-Effekt.
+- **Vollständigkeit** in allen Läufen, auch mit 4 Workern und
+  Dashboard-Sitzungen:
+  - gespeicherte Requests = gesendete Requests + 2–8 Health-Checks des
+    Testaufbaus;
+  - 0 verworfen, 0 Schreibfehler;
+  - keine SQLite-Sperrfehler.
+- **Viele Dashboard-Sitzungen:** 4 Worker, 50 API-Requests parallel, 8
+  Sitzungen fragen alle 0,25 s ab:
+  - 1.308 Dashboard-Abfragen in 60 s, alle mit 200;
+  - p95 je Seite 136–266 ms;
+  - API-Durchsatz 93,7 rps, innerhalb der Streuung von „Erfassung + Web“.
+
+**Störungen:**
+
+| Szenario | Ergebnis |
+|---|---|
+| Statusprüfungen tröpfeln, hängen oder brechen ab (50 parallele Requests, Prüfung alle 10 s) | 0 verworfen, 0 Schreibfehler, alle Requests gespeichert. Flushes verzögern sich durch die Prüffristen (9 statt ≈ 15 Heartbeats in 70 s); größte Lücke ≈ Flush-Intervall + 0,5 s + 2 × 3 s Frist ≈ 11,5 s, unter der Stale-Schwelle von 20 s. Ereignisse `service_unreachable` und `service_recovered` vorhanden. |
+| Upstream 20 s komplett weg (4 Worker) | 162 Requests mit 502/504 (korrekte Fehler der Kunden-API), 161 `upstream_error`-Ereignisse; Monitoring vollständig. |
+| Puffer übergelaufen (`buffer_max_requests: 100`, Flush alle 30 s, ≈ 206 rps) | 200 gespeichert + 8.043 gezählte Verluste = alle gesendeten Requests; Ereignis `buffer_overflow`. Nichts geht stillschweigend verloren. |
+| Speicherdruck (Datenbank 24,3 MiB, Grenze 16 MiB, Wartung alle 10 s) | Nach der Korrektur unten: Schreibpause sichtbar (`storage_limit_reached`), Pruning (`storage_pressure`), Datei 24,3 → 20,9 MiB in 60 s, nach der Last 15,8 MiB; Schreibzugriffe laufen wieder, gepufferte Requests werden nachgeschrieben (0 Verluste). |
+
+**Wachstum der Datenbank:** ≈ 350–460 Byte pro Request in der Hauptdatei
+(Rohdaten, Rollups, Indizes; gemessen bei 6.000 bzw. 56.000 Requests).
+Beispiel: 10.000 Requests pro Tag bei 7 Tagen Rohdaten-Retention ergeben
+≈ 25–35 MiB, dazu wenige MiB Rollups. Die WAL wächst zwischen den
+Checkpoints der Wartung um einige MiB (im Lasttest bis 11 MiB). Standardgrenze:
+512 MiB für alles zusammen.
+
+**Rückweg unter die Speichergrenze:** Wartung im Standardintervall (60 s) mit
+10 % der Rohzeilen pro Lauf. Liegt eine Datenbank deutlich über einer
+nachträglich gesenkten Grenze, dauert der Rückweg einige Minuten. In dieser
+Zeit puffern die Worker; bei sehr hoher Last zählen sie Verluste.
+
+#### Befund aus dem Lasttest: Speichergrenze wurde nie wieder verlassen
+
+`PRAGMA incremental_vacuum(N)` gibt Seiten nur frei, während das Ergebnis
+durchlaufen wird. Mit `conn.execute(...)` ohne `fetchall()` gab SQLite genau
+**eine** Seite pro Aufruf frei. Folgen:
+
+- Gelöschte Zeilen ließen die Datei nicht schrumpfen.
+- Eine Telemetrie-Datenbank, die `storage.max_bytes` einmal erreicht hatte,
+  blieb **dauerhaft** für Schreibzugriffe gesperrt (seit M2). Fail-open: Die
+  Kunden-API war nie betroffen, die Datenqualität zeigte die Lücke.
+
+Der bisherige Test hatte die Dateigröße gemockt. **Korrektur:** `fetchall()` an
+beiden Stellen (Retention, Speicherdruck). Neuer Test
+`test_storage_limit_is_left_again_after_real_pruning` mit echten Dateigrößen;
+ohne die Korrektur schlägt er mit 18,6 MB > 16 MiB fehl.
+
+#### Befund aus dem Lasttest: gleichzeitiger Start mehrerer Worker
+
+Mit `web` und 4 Uvicorn-Workern auf einem **leeren** Datenverzeichnis zeigte ein
+Worker die Oberfläche als gesperrt (503, `auth_store_unavailable`). Ursache waren
+zwei Fehler, die nur beim ersten Start mehrerer Prozesse gleichzeitig auftreten:
+
+1. **WAL-Umschaltung:** `PRAGMA journal_mode = WAL` einer frischen Datei braucht
+   eine exklusive Sperre. SQLite ruft dafür den Busy-Handler nicht immer auf, der
+   Fehler „database is locked“ kommt sofort. Reproduziert mit 8 gleichzeitig
+   öffnenden Verbindungen, je 20 Runden:
+   - Auth-Datenbank: in 14 von 20 Runden;
+   - Telemetrie-Datenbank: in 11 von 20 Runden.
+
+   Folge bei der Telemetrie: Der betroffene Worker lief ohne Datenerfassung
+   (fail-open, API unbeeinträchtigt). Folge bei der Auth-Datenbank: Seine
+   Oberfläche war gesperrt (fail-closed).
+2. **Auth-Migration:** Sie prüfte die Schemaversion nicht erneut, nachdem sie die
+   Schreibsperre erhalten hatte („table meta already exists“). Die
+   Telemetrie-Migration tat das seit M5 bereits.
+
+**Korrektur (minimal):**
+
+- `system/monitoring/sqlite_util.enable_wal` wiederholt die Umschaltung mit
+  begrenztem Backoff innerhalb des vorhandenen Busy-Timeouts; andere Fehler
+  bleiben unverändert.
+- Die Auth-Migration prüft die Version erneut unter der Sperre.
+
+**Ergebnis:**
+
+- 0 von 20 Runden mit Fehlern, für beide Datenbanken.
+- Im Container: dreimal 4 Worker frisch gestartet, jeweils 12 von 12
+  Login-Seiten erreichbar.
+- Neue Tests: `test_concurrently_starting_workers_open_a_fresh_auth_database`,
+  `test_concurrent_workers_create_a_fresh_database`. Ohne Korrektur schlagen
+  sie fehl: der Auth-Test in 4 von 5 Läufen, der Telemetrie-Test als Wettlauf in
+  2 von 3 Läufen. Mit Korrektur gab es keinen Fehler (je 3 Läufe sowie 20
+  Probe-Runden).
+
+### 17.6 Datenbanken und Migrationen
+
+| Prüfung | Ergebnis | Nachweis |
+|---|---|---|
+| v1 → v3, v2 → v3 | Daten unverändert, Paarsummen exakt rekonstruiert | `test_monitoring_migration_v3` |
+| mehrere startende Worker | genau eine Migration | dto. (4 Worker parallel); unter Last mit 4 Uvicorn-Workern im Container |
+| historische Rollups, Vollständigkeit | unvollständige Buckets bleiben „nicht verfügbar“, keine Doppelzählung | dto., `test_monitor_upstreams_api` |
+| Speichergrenzen, WAL, Retention | Pressure-Pruning und Schreibpause sichtbar, Auth-DB unberührt | `test_monitoring_store`, Lasttest `pressure` |
+| Trennung Telemetrie/Auth | getrennte Dateien, getrennte Grenzen; die Migration öffnet die Auth-DB nicht | `test_auth_database_is_not_touched` |
+| fail-open / fail-closed | Telemetrie-Ausfall: API läuft (503 nur in der Daten-API); Auth-Ausfall: Oberfläche gesperrt | `test_telemetry_outage_returns_503_…`, `test_monitor_web_failures` |
+| Backup und Wiederherstellung | Online-Backup während Schreibzugriffen, Integrität, Schema, Sessions, Rechte | **neu:** `test_monitor_backup_restore`; Vorgehen in der Betriebsanleitung §8 |
+
+### 17.7 Regression HubDix und PDF4Fill
+
+Neu: `tests/test_monitoring_regression_release.py`. Dieselbe Folge von Requests
+läuft gegen drei Konfigurationen: Monitoring aus, nur Datenerfassung, Erfassung
+plus Weboberfläche. Die Antworten (Status, Content-Type, normalisierter Body)
+müssen identisch sein. Abgedeckt sind:
+
+- **HubDix:**
+  - `extract-text` inklusive OCR-Fallback und Upstream-Ausfall;
+  - `convert-to-pdf`, `analyze`, `warmup`;
+  - Prompt Lab (Liste, Laden, Analyse);
+  - Assistent;
+  - Berechtigungen: fehlender Dienst, gesperrter, unbekannter oder fehlender Key.
+- **PDF4Fill:**
+  - `forms/inspect` mit Erkennung und OCR (Formular, Scan-ähnlich, Namen ohne
+    gültiges UTF-8);
+  - `forms/fill` mit diesen Namen, falscher Hash;
+  - Dienst deaktiviert, „forms only“-Client.
+- **Allgemein:** unbekannte Routen. Ohne Monitoring gibt es keine Dateien, kein
+  Monitoring-Objekt und `/monitor` ergibt 404.
+
+Die bestehende Gesamtsuite (HubDix, PDF4Fill, Konfiguration) läuft unverändert
+grün (§17.9).
+
+**Nicht verifiziert:** der vollständige PDF4Fill-Workflow auf dem
+Produktionssystem. Er ist ein Pflichtschritt vor der Freigabe
+(Betriebsanleitung §3.1).
+
+### 17.8 Browser und visuelle Abnahme
+
+Neu: `tests/test_monitor_visual_release.py`. Geprüft werden alle 8 Seiten bei 320,
+375, 768 und 1440 px, jeweils Deutsch und Englisch, hell und dunkel (128
+Ansichten):
+
+- keine horizontale Überbreite, kein abgeschnittener Text;
+- keine JS-Fehler, keine CSP-Verstöße;
+- WCAG-Kontrast für Text (AA: 4,5:1 bzw. 3:1 bei großer Schrift);
+- Tastaturbedienung: Navigation, Filter, Live/Pause und Menü auf dem Telefon
+  erreichbar und bedienbar, sichtbarer Fokus;
+- `prefers-reduced-motion`: keine Diagramm-Animationen und keine CSS-Übergänge.
+
+Ergebnis: Zunächst wurden zwei Kontrastprobleme gefunden: im Dunkelmodus die Kopfzeilen-Buttons mit 3,3:1, im Hellmodus „nicht verfügbar“-Markierungen mit 3,1:1. Dazu waren die Diagramme auf Telefonen zu niedrig, weil umbrechende Legenden kaum Platz für den Plot ließen. Alle drei Punkte sind behoben. Danach bestehen alle 11 Browser-Tests lokal (Edge), mit 157 Screenshots, davon 128 aus der M7-Matrix. Die vollständige Screenshot-Sammlung liegt im
+CI-Artefakt `monitoring-screenshots`.
+
+### 17.9 Testergebnisse
+
+| Lauf | Ergebnis |
+|---|---|
+| Windows 10, Python 3.12, vollständige Suite inklusive Browser-Tests (Edge, `DOCPIPE_REQUIRE_BROWSER=1`) | 1360 bestanden, 9 übersprungen (nur POSIX-Rechte-Tests) |
+| Linux (WSL Ubuntu 22.04, Python 3.12.16, ohne root, UID 1000), vollständige Suite | 1357 bestanden, 4 übersprungen (Browser-Module, dort ohne Playwright; sie laufen in der CI) |
+| Ruff (`system`, `tests`, `loadtest`) | keine Befunde |
+| Lokaler Docker-Build (`docker build`, Docker Engine 29.1.3) | erfolgreich, Image 269 MB; auch für alle Lasttests verwendet |
+| `pip-audit` gegen `requirements.txt` und gegen `pip freeze` des Images (43 Pakete) | keine bekannten Schwachstellen (Stand 28.11.2026) |
+| Secret-Scan `gitleaks` 8.24.3 (gesamte Historie des Branches, 83 Commits, und Arbeitsverzeichnis) | ein Fund, Fehlalarm: `GEHEIMKLAUSEL-4711` ist ein synthetischer Kanarienwert in `tests/test_contract_diagnose.py`, kein Zugangsdatum |
+
+Die GitHub-CI auf dem finalen Commit ist im Draft-PR #6 dokumentiert (Job
+`lint-and-test` sowie `browser-tests` mit Pflicht-Browser und
+Screenshot-Artefakt).
+
+### 17.10 Release-Voraussetzungen und blockierende Aufgaben
+
+**Release-blockierend** (Betrieb, nicht Code):
+
+1. **Ollama `think`-Patch:** liegt nicht im Repository; ohne nachweislich
+   angewendeten Patch keine produktive Freigabe (Betriebsanleitung §2.1). Eine
+   abwärtskompatible Konfigurationsoption ist als eigene Aufgabe beschrieben.
+2. **PDF4Fill-Workflow** auf dem Produktionssystem mit synthetischen Formularen
+   verifizieren (§17.7).
+3. **Ressourcenmessung auf dem Zielsystem** nach Aktivierung der Erfassung
+   (Schritt 8). Die lokalen Werte aus §17.5 ersetzen das nicht.
+4. **Abhängigkeiten des Release-Images** mit `pip freeze` festhalten und prüfen
+   (Versionsbereiche in `requirements.txt`).
+
+**Nicht blockierend, dokumentiert:**
+
+- Lockout-DoS in `public_mfa` (Modus nicht freigegeben);
+- H1b, H3, H4;
+- Statusprüfungen im Collector-Thread (begrenzt, §17.5);
+- keine GPU-Werte ohne Provider;
+- teilweise Tokens/s aus Pre-v3-Buckets.
