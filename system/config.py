@@ -149,6 +149,10 @@ class OllamaSettings:
 
     base_url: str
     keep_alive: str = DEFAULT_OLLAMA_KEEP_ALIVE
+    # Ollama's `think` request field. None (option absent): the field is not
+    # sent - exactly the behaviour of every earlier DocPipe version. True/False
+    # are sent as given; see README "Ollama think".
+    think: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -586,9 +590,18 @@ def load_settings() -> Settings:
             f"ollama.keep_alive has an invalid value {keep_alive!r} - expected a positive Ollama "
             "duration such as '30s', '5m', '15m', '1h', or a plain positive integer number of seconds."
         )
+    raw_think = raw_ollama.get("think")
+    if raw_think is not None and not isinstance(raw_think, bool):
+        # Only real YAML booleans: a quoted "false" or 0 is a typo that would
+        # otherwise silently change model behaviour.
+        raise ConfigError(
+            f"ollama.think has an invalid value {raw_think!r} - expected true, false, or the option omitted "
+            "(omitted: the field is not sent to Ollama)."
+        )
     ollama = OllamaSettings(
         base_url=os.environ.get("OLLAMA_URL", raw_ollama.get("base_url", "")),
         keep_alive=keep_alive,
+        think=raw_think,
     )
 
     raw_prompts = raw.get("prompts") or {}

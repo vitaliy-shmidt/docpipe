@@ -40,7 +40,9 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     app.state.settings = settings
     stirling_client = StirlingClient(settings.stirling)
-    ollama_client = OllamaClient(settings.ollama.base_url, keep_alive=settings.ollama.keep_alive)
+    ollama_client = OllamaClient(
+        settings.ollama.base_url, keep_alive=settings.ollama.keep_alive, think=settings.ollama.think
+    )
     monitor = None
     if settings.monitoring.enabled:
         # Imported lazily: with monitoring disabled none of the runtime

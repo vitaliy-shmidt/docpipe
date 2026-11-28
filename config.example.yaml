@@ -44,6 +44,14 @@ ollama:
   # genuinely idle periods. Re-evaluate under real RAM/swap pressure (see
   # docs/staging-deployment.md "RAM awareness") before raising it further.
   keep_alive: "15m"
+  # Ollama's `think` field for models with a reasoning phase (README "Ollama
+  # think"). Omit it to send no `think` field at all (behaviour of earlier
+  # versions). false: answer without a reasoning phase - recommended for
+  # structured extraction with thinking-capable models; true: only for models
+  # and Ollama versions that support it (otherwise ai_processing_failed, no
+  # retry, no other model). Only true/false are valid. Sent on analyze, Prompt
+  # Lab and assistant generations, never on the warm-up.
+  think: false
 
 # Optional (V2.2) - see docs/prompt-lab.md. Omit this whole block entirely
 # for the defaults shown here. base_dir is the repo-shipped prompts

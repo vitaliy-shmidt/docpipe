@@ -307,6 +307,8 @@ ollama:                    # optional - only needed if any client has services.a
   keep_alive: "15m"         # optional - how long Ollama keeps a model resident after last use;
                              # defaults to "5m" if omitted. Sent identically on every /api/generate
                              # call (analyze AND assistant) - see "Ollama Keep-Alive" below.
+  think: false              # optional - Ollama's `think` field (true/false). Omitted: the field is
+                             # not sent at all (behaviour of earlier versions). See "Ollama think".
 
 models:                    # named resource/quality classes - see "Model profiles" below
   light:
@@ -418,6 +420,47 @@ any active model-preload/warm-keeper cron — `keep_alive` only changes
 *when Ollama's own existing eviction runs*, it does not prevent eviction
 after real inactivity (see `docs/staging-deployment.md` "Ollama
 Keep-Alive" for the acceptance test and RAM guidance).
+
+### Ollama think
+
+`ollama.think` sets Ollama's `think` request field for models that can
+reason before answering ("thinking" models):
+
+| Config | Sent to Ollama |
+|---|---|
+| omitted (or `null`) | no `think` field at all - byte-identical to every earlier DocPipe version |
+| `think: false` | `"think": false` - the model answers without a reasoning phase |
+| `think: true` | `"think": true` - only for models (and Ollama versions) that support it |
+
+Only real YAML booleans are accepted; `"false"` in quotes, `0` or `no`-like
+strings fail the config validation at startup instead of silently changing
+model behaviour.
+
+**Where it applies:**
+
+- It is sent on every structured generation request: the primary call and
+  the single repair call of `/documents/analyze`, `/lab/analyze` and
+  `/assistant/query`, all through the one shared `OllamaClient`.
+- It is **not** sent with `/documents/warmup`, which only loads the model
+  with an empty prompt and generates nothing.
+- DocPipe reads only Ollama's `response`. A separate `thinking` text that
+  Ollama may return is never used, stored, logged or recorded by the
+  monitoring.
+
+**Older Ollama versions and models without thinking support:**
+
+- An Ollama version without the field ignores it (JSON decoding of unknown
+  fields).
+- A model without thinking support may reject `think: true` with an HTTP
+  error. DocPipe then answers `ai_processing_failed`, exactly like any other
+  non-200 answer from Ollama: no silent retry and no fallback to another
+  model.
+- `think: false` is the safe production value for thinking-capable
+  instruct models used for structured extraction.
+
+This option replaces the earlier manual source patch (`"think": False`
+hard-coded in `system/services/ollama.py`) of some installations: set
+`ollama.think: false` instead and build from the unmodified repository.
 
 ## API
 
