@@ -445,7 +445,8 @@ def test_meta_describes_sections_and_retention(
 ):
     with dashboard(fake_stirling_holder, fake_ollama_holder, monkeypatch, tmp_path) as client:
         meta = get(client, "meta").json()
-        assert meta["sections"]["ollama"] == "M5" and meta["sections"]["overview"] is True
+        assert meta["sections"]["ollama"] is True and meta["sections"]["overview"] is True
+        assert meta["sections"]["connectors"] == "#2" and "logs" not in meta["sections"]  # M6 dropped
         assert meta["poll_seconds"]["activity"] == 5 and meta["poll_seconds"]["overview"] == 15
         assert set(CLIENTS) <= set(meta["clients"]) and "unauthenticated" in meta["clients"]
         assert meta["build"]["source_state"] == "unknown"

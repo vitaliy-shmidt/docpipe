@@ -226,8 +226,9 @@ def test_pages_have_no_inline_code_no_external_resources_and_escape_output(
     assert 'lang="de"' in pages[1].text and "Anmelden" in pages[1].text
     shell = pages[2].text
     assert "Übersicht" not in shell and "Overview" in shell
-    # not yet implemented (Logs: M6, Connectors: #2) are disabled; Ollama and Stirling are live since M5
-    assert shell.count('class="nav-link disabled') == 2 and shell.count("planned") >= 2
+    # only AI Connectors (issue #2) is still planned and disabled; the Logs section (M6) was dropped
+    assert shell.count('class="nav-link disabled') == 1 and shell.count("planned") >= 1
+    assert ">Logs<" not in shell and "Logs" not in shell  # (SVG paths contain "M6", so no check on that)
     assert 'href="/monitor/ollama"' in shell and 'href="/monitor/stirling"' in shell
 
 

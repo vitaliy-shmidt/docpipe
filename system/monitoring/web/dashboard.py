@@ -1342,10 +1342,9 @@ class Dashboard:
                 "performance": True,
                 "server": True,
                 "security": True,
-                "ollama": "M5",
-                "stirling": "M5",
-                "logs": "M6",
-                "connectors": "#2",
+                "ollama": True,
+                "stirling": True,
+                "connectors": "#2",  # planned until issue #2 (Universal AI Gateway)
             },
         }
 

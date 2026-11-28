@@ -44,7 +44,6 @@ _EN = {
     "nav_ollama": "Ollama",
     "nav_stirling": "Stirling PDF",
     "nav_connectors": "AI Connectors",
-    "nav_logs": "Logs",
     "nav_security": "Security",
     "planned": "planned",
     "last_updated": "Last update",
@@ -382,7 +381,6 @@ _DE = {
     "nav_ollama": "Ollama",
     "nav_stirling": "Stirling PDF",
     "nav_connectors": "KI-Connectoren",
-    "nav_logs": "Logs",
     "nav_security": "Sicherheit",
     "planned": "geplant",
     "last_updated": "Letzte Aktualisierung",
@@ -718,7 +716,6 @@ SECTIONS = (
     ("nav_security", "shield-lock", None, "/monitor/security"),
     ("nav_ollama", "cpu", None, "/monitor/ollama"),
     ("nav_stirling", "file-earmark-pdf", None, "/monitor/stirling"),
-    ("nav_logs", "journal-text", "M6", None),
     ("nav_connectors", "plug", "#2", None),
 )
 
